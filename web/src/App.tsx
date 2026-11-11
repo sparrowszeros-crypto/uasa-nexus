@@ -4,6 +4,8 @@ import { AuthGate } from './components/AuthGate'
 import { ClassRoster } from './components/ClassRoster'
 import { SchoolSetupPanel } from './components/SchoolSetup'
 import { StaffScope } from './components/StaffScope'
+import { ExamsManagement } from './components/ExamsManagement'
+import { MarksEntry } from './components/MarksEntry'
 import { useAccount } from './lib/account-context'
 import type { AccountProfile } from '../shared/auth'
 
@@ -213,6 +215,10 @@ function Workspace({ account, logout }: { account: AccountProfile; logout: () =>
           </div>
         ) : role === 'secretary' && page === 'Guru & Penugasan' ? (
           <SchoolSetupPanel email={account.email} page="teachers" />
+        ) : role === 'secretary' && page === 'Peperiksaan' ? (
+          <ExamsManagement email={account.email} />
+        ) : (role === 'secretary' || role === 'subjectTeacher') && page === 'Markah' ? (
+          <MarksEntry email={account.email} />
         ) : (
           <section className="content-card empty-state">
             <span className="empty-icon" aria-hidden="true">▤</span>
