@@ -126,16 +126,14 @@ export function SchoolSetupPanel({ email, page, onClassCreated }: { email: strin
         <>
           <section className="content-card">
             <h2>Daftar guru</h2>
-            <p>E-mel yang didaftarkan oleh setiausaha peperiksaan akan digunakan guru untuk log masuk sistem bersama kata laluan.</p>
+            <p>Daftarkan alamat e-mel Google atau DELIMa guru. Guru akan log masuk menggunakan akaun Google yang didaftarkan.</p>
             <form onSubmit={submit(d => ({
               action: 'teacher', email: field(d, 'email'), name: field(d, 'name'),
               roles: teacherRoles.filter(r => d.has(r)),
-              initialPassword: field(d, 'initialPassword') || 'Guru2027!',
             }), 'Guru berjaya didaftarkan.')}>
               <fieldset disabled={disabled} className="setup-fields">
                 <label>Nama guru<input name="name" autoComplete="off" required maxLength={120} /></label>
-                <label>Alamat e-mel guru<input name="email" type="email" placeholder="cth: guru@gmail.com" autoComplete="off" required maxLength={254} /></label>
-                <label>Kata laluan awal<input name="initialPassword" defaultValue="Guru2027!" minLength={6} maxLength={100} required /></label>
+                <label>Alamat e-mel Google / DELIMa guru<input name="email" type="email" placeholder="cth: guru@gmail.com" autoComplete="off" required maxLength={254} /></label>
                 <div className="setup-roles" role="group" aria-label="Peranan guru">
                   {teacherRoles.map(r => <label key={r}><input name={r} type="checkbox" />{roleNames[r]}</label>)}
                 </div>
@@ -144,31 +142,9 @@ export function SchoolSetupPanel({ email, page, onClassCreated }: { email: strin
             </form>
             <h3>Guru berdaftar ({setup.teachers.length})</h3>
             {setup.teachers.length ? <ul className="setup-list">{setup.teachers.map(t =>
-              <li key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <strong>{t.name}</strong>
-                  <span>{t.email} · {t.roles.map(r => roleNames[r]).join(', ')}</span>
-                  {t.locked && (
-                    <span style={{ color: '#dc2626', fontWeight: 600, display: 'block', fontSize: '12px' }}>
-                      [DISEKAT - 3 kali cubaan gagal]
-                    </span>
-                  )}
-                </div>
-                {t.locked && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    style={{ borderColor: '#ef4444', color: '#b91c1c' }}
-                    disabled={disabled}
-                    onClick={() => {
-                      if (window.confirm(`Buka semula sekatan untuk ${t.name}?`)) {
-                        void save({ action: 'unlock', teacherId: t.id }, 'Sekatan akaun guru berjaya dibuka.')
-                      }
-                    }}
-                  >
-                    Buka Sekatan
-                  </button>
-                )}
+              <li key={t.id}>
+                <strong>{t.name}</strong>
+                <span>{t.email} · {t.roles.map(r => roleNames[r]).join(', ')}</span>
               </li>,
             )}</ul> : <p>Belum ada guru didaftarkan.</p>}
           </section>

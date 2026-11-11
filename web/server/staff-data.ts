@@ -1,18 +1,15 @@
 import { neon, type NeonQueryFunction } from '@neondatabase/serverless'
 import { AuthError, readBearer, requireStaffIdentity } from './auth-core.ts'
-import { verifySessionToken } from './password.ts'
 import { verifyFirebaseToken } from './firebase-admin.ts'
 import type { VerifiedIdentity } from './auth-core.ts'
 
 export type Sql = NeonQueryFunction<false, false>
 
 export async function verifyAuthToken(token: string): Promise<VerifiedIdentity> {
-  const localIdentity = verifySessionToken(token)
-  if (localIdentity) return localIdentity
   return await verifyFirebaseToken(token)
 }
 
-// Resolve the active, unlocked account and current roles inside the same query as the data.
+// Resolve the active account and current roles inside the same query as the data.
 export function staffActor(sql: Sql, identity: VerifiedIdentity) {
   return sql`
     SELECT a.id,
@@ -21,7 +18,7 @@ export function staffActor(sql: Sql, identity: VerifiedIdentity) {
       bool_or(r.role = 'subject_teacher') AS subject_teacher
     FROM accounts a
     JOIN account_roles r ON r.account_id = a.id
-    WHERE a.active AND NOT a.locked AND a.email = ${identity.email}
+    WHERE a.active AND a.email = ${identity.email}
       AND r.role IN ('exam_secretary', 'class_teacher', 'subject_teacher')
     GROUP BY a.id
   `

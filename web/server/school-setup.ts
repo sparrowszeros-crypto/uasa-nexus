@@ -1,7 +1,6 @@
 import { AuthError, type VerifiedIdentity } from './auth-core.ts'
 import { staffActor, type Sql } from './staff-data.ts'
 import { teacherRoles, type SetupCommand } from '../shared/setup.ts'
-import { hashPassword } from './password.ts'
 
 export function parseSetupCommand(value: unknown): SetupCommand {
   const invalid = (message = 'Maklumat borang tidak sah.'): never => { throw new AuthError(400, message) }
@@ -42,13 +41,7 @@ export function parseSetupCommand(value: unknown): SetupCommand {
       const requested = input.roles as unknown[]
       const roles = teacherRoles.filter(role => requested.includes(role))
       if (!roles.length || requested.length !== roles.length) return invalid('Pilihan peranan guru tidak sah.')
-      const initialPassword = typeof input.initialPassword === 'string' && input.initialPassword.trim().length >= 6
-        ? input.initialPassword.trim()
-        : 'Guru2027!'
-      return { action: 'teacher', email, name: label('name', 120), roles, initialPassword }
-    }
-    case 'unlock': {
-      return { action: 'unlock', teacherId: id('teacherId') }
+      return { action: 'teacher', email, name: label('name', 120), roles }
     }
     case 'grant':
     case 'revoke':
@@ -66,12 +59,12 @@ export function schoolSetup(sql: Sql, identity: VerifiedIdentity) {
         ORDER BY y.year DESC, c.name) FROM classes c JOIN academic_years y ON y.id = c.academic_year_id), '[]') AS classes,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', s.id, 'code', s.code, 'name', s.name, 'active', s.active)
         ORDER BY s.name, s.code) FROM subjects s), '[]') AS subjects,
-      COALESCE((SELECT jsonb_agg(jsonb_build_object('id', t.id, 'email', t.email, 'name', t.display_name, 'roles', t.roles, 'locked', t.locked, 'failedAttempts', t.failed_attempts)
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id', t.id, 'email', t.email, 'name', t.display_name, 'roles', t.roles)
         ORDER BY t.display_name, t.email) FROM (
-          SELECT a.id, a.email, a.display_name, a.locked, a.failed_attempts, array_agg(r.role ORDER BY r.role) AS roles
+          SELECT a.id, a.email, a.display_name, array_agg(r.role ORDER BY r.role) AS roles
           FROM accounts a JOIN account_roles r ON r.account_id = a.id
           WHERE a.active AND r.role IN ('class_teacher', 'subject_teacher')
-          GROUP BY a.id, a.email, a.display_name, a.locked, a.failed_attempts
+          GROUP BY a.id, a.email, a.display_name
         ) t), '[]') AS teachers,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('teacherId', t.account_id, 'classId', t.class_id, 'subjectId', t.subject_id)
         ORDER BY t.account_id, t.class_id, t.subject_id) FROM (
@@ -114,11 +107,10 @@ export function changeSchoolSetup(sql: Sql, identity: VerifiedIdentity, command:
     SELECT EXISTS(SELECT 1 FROM actor) AS allowed, EXISTS(SELECT 1 FROM logged) AS changed
   `
   if (command.action === 'teacher') {
-    const passwordHash = hashPassword(command.initialPassword || 'Guru2027!')
     return sql`
       WITH actor AS (${actor}), changed AS (
-        INSERT INTO accounts (email, display_name, password_hash)
-        SELECT ${command.email}, ${command.name}, ${passwordHash} FROM actor
+        INSERT INTO accounts (email, display_name)
+        SELECT ${command.email}, ${command.name} FROM actor
         ON CONFLICT (email) DO NOTHING RETURNING id, email, display_name
       ), assigned AS (
         INSERT INTO account_roles (account_id, role)
@@ -130,22 +122,6 @@ export function changeSchoolSetup(sql: Sql, identity: VerifiedIdentity, command:
         SELECT a.id, 'teacher.registered', 'account', c.id,
           to_jsonb(c) || jsonb_build_object('roles', ${JSON.stringify(command.roles)}::jsonb)
         FROM actor a CROSS JOIN changed c WHERE EXISTS (SELECT 1 FROM assigned)
-        RETURNING id
-      )
-      SELECT EXISTS(SELECT 1 FROM actor) AS allowed, EXISTS(SELECT 1 FROM logged) AS changed
-    `
-  }
-  if (command.action === 'unlock') {
-    return sql`
-      WITH actor AS (${actor}), changed AS (
-        UPDATE accounts
-        SET locked = false, failed_attempts = 0, locked_at = NULL
-        WHERE id = ${command.teacherId} AND EXISTS (SELECT 1 FROM actor)
-        RETURNING id, email, display_name
-      ), logged AS (
-        INSERT INTO audit_events (actor_id, event_type, entity_type, entity_id, after_value)
-        SELECT a.id, 'teacher.unlocked', 'account', c.id, to_jsonb(c)
-        FROM actor a CROSS JOIN changed c
         RETURNING id
       )
       SELECT EXISTS(SELECT 1 FROM actor) AS allowed, EXISTS(SELECT 1 FROM logged) AS changed

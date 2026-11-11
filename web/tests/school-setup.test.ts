@@ -18,7 +18,7 @@ test('validates school levels, email, teacher roles and identifiers', () => {
   reject({ action: 'grant', teacherId: 'x', classId: 'y', subjectId: null })
   assert.deepEqual(parseSetupCommand({
     action: 'teacher', email: ' GURU@GMAIL.COM ', name: ' Guru  Contoh ', roles: ['subject_teacher'],
-  }), { action: 'teacher', email: 'guru@gmail.com', name: 'Guru Contoh', roles: ['subject_teacher'], initialPassword: 'Guru2027!' })
+  }), { action: 'teacher', email: 'guru@gmail.com', name: 'Guru Contoh', roles: ['subject_teacher'] })
 })
 
 test('admin routes require a token and refuse unsupported methods', async () => {

@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { authenticateStaff, authErrorResponse, AuthError, readBearer } from '../server/auth-core.ts'
-import { hashPassword, verifyPassword, signSessionToken, verifySessionToken } from '../server/password.ts'
-import { generateCaptcha, verifyCaptcha } from '../server/captcha.ts'
 import type { AccountProfile } from '../shared/auth.ts'
 import type { VerifiedIdentity } from '../server/auth-core.ts'
 
@@ -11,7 +9,7 @@ const identity: VerifiedIdentity = {
   email: 'guru@sekolah.edu.my',
   emailVerified: true,
   projectId: 'uasa-nexus',
-  provider: 'password',
+  provider: 'google.com',
 }
 const profile: AccountProfile = {
   id: 'account-1',
@@ -88,33 +86,6 @@ test('multiple assigned roles survive and the verified email is normalized', asy
   assert.equal(captured?.email, 'guru@sekolah.edu.my')
 })
 
-test('password hashing and verification work correctly', () => {
-  const hash = hashPassword('MySecret123!')
-  assert.equal(verifyPassword('MySecret123!', hash), true)
-  assert.equal(verifyPassword('WrongPass', hash), false)
-  assert.equal(verifyPassword('MySecret123!', null), false)
-  assert.equal(verifyPassword('MySecret123!', 'invalid-hash'), false)
-})
-
-test('session token signing and verification work with expiry', () => {
-  const token = signSessionToken({ uid: 'user-123', email: 'sparrowszeros@gmail.com' })
-  assert.ok(token)
-  const verified = verifySessionToken(token)
-  assert.ok(verified)
-  assert.equal(verified?.email, 'sparrowszeros@gmail.com')
-  assert.equal(verified?.uid, 'user-123')
-  assert.equal(verified?.provider, 'password')
-  assert.equal(verifySessionToken('corrupted.token.value'), null)
-})
-
-test('captcha generation and verification validate answers correctly', () => {
-  const { key, svg } = generateCaptcha()
-  assert.ok(key)
-  assert.ok(svg.includes('<svg'))
-  assert.equal(verifyCaptcha(key, 'WRONG'), false)
-  assert.equal(verifyCaptcha('', 'ABCD'), false)
-})
-
 test('database failures do not become authentication success', async () => {
   await assert.rejects(authenticateStaff('Bearer verified', {
     ...defaults, findOrBind: async () => { throw new Error('database connection lost') },
@@ -131,9 +102,9 @@ test('unexpected errors never disclose tokens, keys or connection strings', asyn
 })
 
 test('expected authorization errors retain status and clear user message', async () => {
-  const response = authErrorResponse(new AuthError(403, 'Akaun anda telah disekat.'))
+  const response = authErrorResponse(new AuthError(403, 'Akaun anda belum didaftarkan.'))
   assert.equal(response.status, 403)
   const payload = await response.json() as { ok: boolean; message: string }
   assert.equal(payload.ok, false)
-  assert.equal(payload.message, 'Akaun anda telah disekat.')
+  assert.equal(payload.message, 'Akaun anda belum didaftarkan.')
 })

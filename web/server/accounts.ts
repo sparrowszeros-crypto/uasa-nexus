@@ -7,13 +7,13 @@ import type { AccountProfile } from '../shared/auth.ts'
 export function staffQueries(sql: NeonQueryFunction<false, false>, identity: VerifiedIdentity) {
   return [
     sql`
-      SELECT a.id, a.email, a.display_name, a.locked,
+      SELECT a.id, a.email, a.display_name,
         array_agg(DISTINCT r.role ORDER BY r.role) AS roles
       FROM accounts a
       JOIN account_roles r ON r.account_id = a.id
-      WHERE a.active = true AND NOT a.locked AND a.email = ${identity.email}
+      WHERE a.active = true AND a.email = ${identity.email}
         AND r.role IN ('exam_secretary','class_teacher','subject_teacher')
-      GROUP BY a.id, a.email, a.display_name, a.locked
+      GROUP BY a.id, a.email, a.display_name
     `,
   ]
 }
@@ -22,7 +22,7 @@ export async function findStaffAccount(identity: VerifiedIdentity): Promise<Acco
   if (!process.env.DATABASE_URL) throw new AuthError(503, 'Konfigurasi pangkalan data belum tersedia.')
   const sql = neon(process.env.DATABASE_URL)
 
-  // Selaraskan account_identities dengan UID Firebase jika ada
+  // Selaraskan identiti Firebase dengan akaun guru
   if (identity.uid && identity.projectId) {
     try {
       await sql`
@@ -39,13 +39,13 @@ export async function findStaffAccount(identity: VerifiedIdentity): Promise<Acco
   }
 
   const rows = await sql`
-    SELECT a.id, a.email, a.display_name, a.locked,
+    SELECT a.id, a.email, a.display_name,
       array_agg(DISTINCT r.role ORDER BY r.role) AS roles
     FROM accounts a
     JOIN account_roles r ON r.account_id = a.id
-    WHERE a.active = true AND NOT a.locked AND a.email = ${identity.email}
+    WHERE a.active = true AND a.email = ${identity.email}
       AND r.role IN ('exam_secretary','class_teacher','subject_teacher')
-    GROUP BY a.id, a.email, a.display_name, a.locked
+    GROUP BY a.id, a.email, a.display_name
   `
   const row = rows[0]
   if (!row) return null

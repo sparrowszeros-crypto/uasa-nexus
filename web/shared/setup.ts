@@ -5,13 +5,12 @@ export type TeacherRole = typeof teacherRoles[number]
 export type SetupCommand =
   | { action: 'class'; year: number; level: typeof levels[number]; name: string }
   | { action: 'subject'; code: string; name: string }
-  | { action: 'teacher'; email: string; name: string; roles: TeacherRole[]; initialPassword?: string }
-  | { action: 'unlock'; teacherId: string }
+  | { action: 'teacher'; email: string; name: string; roles: TeacherRole[] }
   | { action: 'grant' | 'revoke'; teacherId: string; classId: string; subjectId: string | null }
 
 export interface SchoolSetup {
   classes: { id: string; year: number; name: string; level: string }[]
   subjects: { id: string; code: string; name: string; active: boolean }[]
-  teachers: { id: string; name: string; email: string; roles: TeacherRole[]; locked?: boolean; failedAttempts?: number }[]
+  teachers: { id: string; name: string; email: string; roles: TeacherRole[] }[]
   assignments: { teacherId: string; classId: string; subjectId: string | null }[]
 }
