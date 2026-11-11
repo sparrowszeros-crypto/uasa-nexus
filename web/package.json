@@ -1,0 +1,46 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env node_modules/vite/bin/vite.js",
+    "build": "npm run check:server && tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "check:server": "tsc --project netlify/functions/tsconfig.json",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "auth:check": "node --env-file=.env scripts/check-auth-setup.mjs",
+    "auth:migrate": "node --env-file=.env scripts/migrate-auth.mjs"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
+    "firebase": "^13.1.0",
+    "firebase-admin": "^14.5.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@netlify/vite-plugin": "^3.0.1",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.13.0",
+    "typescript": ">=5.9 <6.1",
+    "typescript-eslint": "^8.72.0",
+    "vite": "^8.3.5"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  },
+  "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "1.14.7"
+    }
+  }
+}

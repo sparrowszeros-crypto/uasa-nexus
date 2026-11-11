@@ -1,0 +1,16 @@
+.setup-panel { display: grid; gap: 1rem; }
+.setup-fields { border: 0; padding: 0; margin: 1rem 0; min-width: 0; display: flex; flex-wrap: wrap; gap: .85rem; align-items: end; }
+.setup-fields > label { flex: 1 1 11rem; min-width: 0; display: grid; gap: .35rem; font-weight: 600; }
+.setup-fields input:not([type="checkbox"]), .setup-fields select { width: 100%; box-sizing: border-box; font: inherit; font-weight: 400; padding: .65rem; border: 1px solid #a6b9ba; border-radius: .5rem; color: inherit; background: white; }
+.setup-roles { display: grid; gap: .35rem; }
+.setup-roles label { display: flex; align-items: center; gap: .4rem; }
+.setup-panel button:disabled { opacity: .6; cursor: default; }
+.setup-list { list-style: none; padding: 0; }
+.setup-list li { padding: .65rem 0; border-bottom: 1px solid #dae3e3; display: flex; justify-content: space-between; flex-wrap: wrap; align-items: center; gap: .4rem 1rem; overflow-wrap: anywhere; }
+.setup-list li div { display: grid; gap: .2rem; }
+.setup-list li span { color: #415b61; }
+.setup-success, .setup-error { margin: 0; padding: .7rem 1rem; border-radius: .5rem; }
+.setup-success { color: #124f3e; background: #dceee7; }
+.setup-error { color: #89272a; background: #fff1f0; }
+
+.roster-edit { flex: 1 1 100%; min-width: 0; }

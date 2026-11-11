@@ -1,0 +1,23 @@
+-- Exam Nexus: struktur asas. Jalankan hanya pada pangkalan data projek yang baharu.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TYPE role_name AS ENUM ('exam_secretary','class_teacher','subject_teacher','parent');
+CREATE TYPE student_status AS ENUM ('active','transferred','removed');
+CREATE TYPE exam_status AS ENUM ('draft','submitted','verified','published');
+CREATE TABLE accounts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), email text NOT NULL UNIQUE, display_name text NOT NULL, google_subject text UNIQUE, password_hash text, active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), CHECK (email = lower(email)));
+CREATE TABLE account_roles (account_id uuid NOT NULL REFERENCES accounts(id), role role_name NOT NULL, PRIMARY KEY(account_id,role));
+CREATE TABLE academic_years (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), year integer NOT NULL UNIQUE CHECK(year BETWEEN 2020 AND 2100));
+CREATE TABLE classes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), academic_year_id uuid NOT NULL REFERENCES academic_years(id), name text NOT NULL, level text NOT NULL CHECK(level IN ('PERALIHAN','1','2','3')), UNIQUE(academic_year_id,name));
+CREATE TABLE subjects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), code text NOT NULL UNIQUE, name text NOT NULL, active boolean NOT NULL DEFAULT true);
+CREATE TABLE students (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), student_number text NOT NULL UNIQUE, full_name text NOT NULL, status student_status NOT NULL DEFAULT 'active', status_date date, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE enrolments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), student_id uuid NOT NULL REFERENCES students(id), class_id uuid NOT NULL REFERENCES classes(id), starts_on date NOT NULL, ends_on date, CHECK(ends_on IS NULL OR ends_on >= starts_on), UNIQUE(student_id,class_id,starts_on));
+CREATE TABLE class_teachers (account_id uuid NOT NULL REFERENCES accounts(id), class_id uuid NOT NULL REFERENCES classes(id), PRIMARY KEY(account_id,class_id));
+CREATE TABLE teaching_assignments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id uuid NOT NULL REFERENCES accounts(id), class_id uuid NOT NULL REFERENCES classes(id), subject_id uuid NOT NULL REFERENCES subjects(id), UNIQUE(account_id,class_id,subject_id));
+CREATE TABLE parent_students (account_id uuid NOT NULL REFERENCES accounts(id), student_id uuid NOT NULL REFERENCES students(id), PRIMARY KEY(account_id,student_id));
+CREATE TABLE activation_codes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id uuid NOT NULL REFERENCES accounts(id), code_hash text NOT NULL UNIQUE, expires_at timestamptz NOT NULL, used_at timestamptz, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE exams (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), academic_year_id uuid NOT NULL REFERENCES academic_years(id), name text NOT NULL, status exam_status NOT NULL DEFAULT 'draft', published_at timestamptz, UNIQUE(academic_year_id,name));
+CREATE TABLE results (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), exam_id uuid NOT NULL REFERENCES exams(id), student_id uuid NOT NULL REFERENCES students(id), class_id uuid NOT NULL REFERENCES classes(id), subject_id uuid NOT NULL REFERENCES subjects(id), mark numeric(5,2), attendance text NOT NULL DEFAULT 'present' CHECK(attendance IN ('present','absent')), updated_by uuid NOT NULL REFERENCES accounts(id), updated_at timestamptz NOT NULL DEFAULT now(), CHECK(mark IS NULL OR mark BETWEEN 0 AND 100), CHECK(attendance <> 'absent' OR mark IS NULL), UNIQUE(exam_id,student_id,subject_id));
+CREATE TABLE audit_events (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, actor_id uuid REFERENCES accounts(id), event_type text NOT NULL, entity_type text NOT NULL, entity_id uuid, before_value jsonb, after_value jsonb, created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX enrolments_class_idx ON enrolments(class_id,student_id);
+CREATE INDEX results_class_exam_idx ON results(class_id,exam_id,subject_id);
+CREATE INDEX results_student_exam_idx ON results(student_id,exam_id);
+CREATE INDEX audit_entity_idx ON audit_events(entity_type,entity_id,created_at);
