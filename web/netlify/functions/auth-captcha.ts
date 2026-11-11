@@ -16,3 +16,4 @@ export default async function handler(request: Request) {
 }
 
 export const config = { path: '/api/auth/captcha' }
+

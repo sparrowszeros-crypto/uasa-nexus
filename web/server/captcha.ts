@@ -117,3 +117,4 @@ export function verifyCaptcha(key: string, inputAnswer: string): boolean {
     return false
   }
 }
+
