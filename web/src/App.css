@@ -483,6 +483,37 @@ h1 {
 .login-button:disabled { cursor:wait; opacity:.65; }
 .login-card .login-note { border-top:1px solid #e3e9eb; margin-top:26px; padding-top:20px; font-size:12px; }
 .login-card .auth-error { padding:14px; background:#fff2ed; color:#8b3624; border:1px solid #efd0c4; border-radius:8px; }
+.auth-alert { padding:14px; border-radius:8px; margin:16px 0; font-size:13px; line-height:1.5; }
+.auth-alert strong { display:block; margin-bottom:4px; font-size:14px; }
+.auth-alert p { margin:0 0 4px; }
+.auth-alert small { display:block; opacity:0.9; font-weight:500; }
+.auth-alert-error { background:#fff2ed; color:#8b3624; border:1px solid #efd0c4; }
+.auth-alert-locked { background:#fef2f2; color:#991b1b; border:2px solid #f87171; box-shadow:0 4px 12px rgba(239, 68, 68, 0.15); }
+
+.login-form { margin-top:20px; display:flex; flex-direction:column; gap:16px; text-align:left; }
+.login-form .form-field { display:flex; flex-direction:column; gap:6px; }
+.login-form label { font-size:13px; font-weight:600; color:#334155; }
+.login-form .field-header { display:flex; justify-content:space-between; align-items:center; }
+.login-form .text-toggle-btn { background:none; border:none; color:#0d9488; font-size:12px; font-weight:600; cursor:pointer; padding:0; }
+.login-form .text-toggle-btn:hover { text-decoration:underline; }
+.login-form input[type="text"],
+.login-form input[type="email"],
+.login-form input[type="password"] {
+  width:100%; padding:10px 14px; border:1px solid #cbd5e1; border-radius:8px; font-size:14px; color:#1e293b; background:#f8fafc;
+  transition:border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.login-form input:focus { outline:none; border-color:#0d9488; background:#fff; box-shadow:0 0 0 3px rgba(13, 148, 136, 0.15); }
+
+.captcha-row { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+.captcha-svg-wrapper { display:flex; align-items:center; justify-content:center; }
+.captcha-refresh-btn {
+  padding:8px 12px; font-size:12px; font-weight:600; color:#0f766e; background:#f0fdfa; border:1px solid #ccfbf1; border-radius:6px;
+  cursor:pointer; transition:background-color 0.15s ease;
+}
+.captcha-refresh-btn:hover:not(:disabled) { background:#ccfbf1; }
+.captcha-refresh-btn:disabled { opacity:0.6; cursor:not-allowed; }
+
+.login-footer-info { font-size:11px; color:#64748b; text-align:center; margin-top:-6px; }
 .auth-status { background:#edf5f1; padding:16px; border-radius:8px; }
 .logout-button { text-align:left; padding:10px 0; color:#f4d48d; border:0; background:transparent; }
 @media(max-width:760px) { .login-page { grid-template-columns:1fr; } .login-intro { gap:30px; padding:28px; } .login-intro h1 { font-size:32px; } .login-content { padding:24px 16px; } .sidebar-footer { display:grid; margin-top:12px; padding:12px 5px 0; } }

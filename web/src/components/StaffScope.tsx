@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { auth } from '../lib/firebase'
+import { getStoredSessionToken } from '../lib/account-context'
 
 interface Scope {
   schoolWide: boolean
@@ -18,9 +18,8 @@ export function StaffScope({ accountEmail }: { accountEmail: string }) {
     const controller = new AbortController()
     async function load() {
       try {
-        const user = auth.currentUser
-        if (!user || user.email?.toLowerCase() !== accountEmail) throw new Error()
-        const token = await user.getIdToken()
+        const token = getStoredSessionToken()
+        if (!token) throw new Error()
         const response = await fetch('/api/staff/scope', {
           signal: controller.signal, headers: { Authorization: `Bearer ${token}` },
         })

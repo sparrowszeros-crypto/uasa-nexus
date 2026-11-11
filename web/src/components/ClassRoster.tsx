@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { auth } from '../lib/firebase'
+import { getStoredSessionToken } from '../lib/account-context'
 import type { ExitStatus, Pupil, RosterClass, RosterCommand } from '../../shared/roster'
 import './SchoolSetup.css'
 
@@ -7,10 +7,10 @@ const statusNames = { active: 'Aktif', transferred: 'Pindah sekolah', removed: '
 const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Kuala_Lumpur' }).format(new Date())
 const value = (form: FormData, key: string) => String(form.get(key) ?? '')
 
-async function rosterRequest(email: string, classId?: string, signal?: AbortSignal, command?: RosterCommand) {
-  const user = auth.currentUser
-  if (!user || user.email?.toLowerCase() !== email) throw new Error('Sila log masuk semula.')
-  const headers = new Headers({ Authorization: 'Bearer ' + await user.getIdToken() })
+async function rosterRequest(_email: string, classId?: string, signal?: AbortSignal, command?: RosterCommand) {
+  const token = getStoredSessionToken()
+  if (!token) throw new Error('Sila log masuk semula.')
+  const headers = new Headers({ Authorization: 'Bearer ' + token })
   if (command) headers.set('Content-Type', 'application/json')
   const response = await fetch('/api/staff/class-roster' + (classId ? '?classId=' + encodeURIComponent(classId) : ''), {
     signal, headers, method: command ? 'POST' : 'GET', body: command ? JSON.stringify(command) : undefined,

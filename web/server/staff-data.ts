@@ -1,11 +1,18 @@
 import { neon, type NeonQueryFunction } from '@neondatabase/serverless'
 import { AuthError, readBearer, requireStaffIdentity } from './auth-core.ts'
+import { verifySessionToken } from './password.ts'
 import { verifyFirebaseToken } from './firebase-admin.ts'
 import type { VerifiedIdentity } from './auth-core.ts'
 
 export type Sql = NeonQueryFunction<false, false>
 
-// Resolve the active account and current roles inside the same query as the data.
+export async function verifyAuthToken(token: string): Promise<VerifiedIdentity> {
+  const localIdentity = verifySessionToken(token)
+  if (localIdentity) return localIdentity
+  return await verifyFirebaseToken(token)
+}
+
+// Resolve the active, unlocked account and current roles inside the same query as the data.
 export function staffActor(sql: Sql, identity: VerifiedIdentity) {
   return sql`
     SELECT a.id,
@@ -13,11 +20,8 @@ export function staffActor(sql: Sql, identity: VerifiedIdentity) {
       bool_or(r.role = 'class_teacher') AS class_teacher,
       bool_or(r.role = 'subject_teacher') AS subject_teacher
     FROM accounts a
-    JOIN account_identities i ON i.account_id = a.id
     JOIN account_roles r ON r.account_id = a.id
-    WHERE a.active AND a.email = ${identity.email}
-      AND i.provider = 'firebase' AND i.project_id = ${identity.projectId}
-      AND i.subject = ${identity.uid}
+    WHERE a.active AND NOT a.locked AND a.email = ${identity.email}
       AND r.role IN ('exam_secretary', 'class_teacher', 'subject_teacher')
     GROUP BY a.id
   `
@@ -96,7 +100,8 @@ export function staffDataHandler(
       })
     }
     try {
-      const identity = requireStaffIdentity(await verifyFirebaseToken(readBearer(request.headers.get('authorization'))))
+      const bearer = readBearer(request.headers.get('authorization'))
+      const identity = requireStaffIdentity(await verifyAuthToken(bearer))
       const url = process.env.DATABASE_URL
       if (!url) throw new Error('Missing database configuration')
       const data = await read(neon(url), identity, request)

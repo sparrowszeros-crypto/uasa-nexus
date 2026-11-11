@@ -7,18 +7,18 @@ import { staffScope } from '../server/staff-data.ts'
 import handler from '../netlify/functions/school-setup.ts'
 import type { SetupCommand } from '../shared/setup.ts'
 
-test('validates school levels, DELIMa email, teacher roles and identifiers', () => {
+test('validates school levels, email, teacher roles and identifiers', () => {
   const reject = (value: unknown) => assert.throws(() => parseSetupCommand(value), e =>
     e instanceof AuthError && e.status === 400)
   reject({ action: 'class', year: 2027, level: '4', name: '4 Budi' })
   reject({ action: 'class', year: '2027', level: '1', name: '1 Budi' })
-  reject({ action: 'teacher', email: 'guru@example.org', name: 'Guru', roles: ['class_teacher'] })
-  reject({ action: 'teacher', email: 'guru@moe-dl.edu.my', name: 'Guru', roles: ['exam_secretary'] })
-  reject({ action: 'teacher', email: 'guru@moe-dl.edu.my', name: 'Guru', roles: [] })
+  reject({ action: 'teacher', email: 'bukan-email', name: 'Guru', roles: ['class_teacher'] })
+  reject({ action: 'teacher', email: 'guru@sekolah.edu.my', name: 'Guru', roles: ['exam_secretary'] })
+  reject({ action: 'teacher', email: 'guru@sekolah.edu.my', name: 'Guru', roles: [] })
   reject({ action: 'grant', teacherId: 'x', classId: 'y', subjectId: null })
   assert.deepEqual(parseSetupCommand({
-    action: 'teacher', email: ' GURU@MOE-DL.EDU.MY ', name: ' Guru  Contoh ', roles: ['subject_teacher'],
-  }), { action: 'teacher', email: 'guru@moe-dl.edu.my', name: 'Guru Contoh', roles: ['subject_teacher'] })
+    action: 'teacher', email: ' GURU@GMAIL.COM ', name: ' Guru  Contoh ', roles: ['subject_teacher'],
+  }), { action: 'teacher', email: 'guru@gmail.com', name: 'Guru Contoh', roles: ['subject_teacher'], initialPassword: 'Guru2027!' })
 })
 
 test('admin routes require a token and refuse unsupported methods', async () => {

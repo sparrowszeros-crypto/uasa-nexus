@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { auth } from '../lib/firebase'
+import { getStoredSessionToken } from '../lib/account-context'
 import { levels, teacherRoles, type SchoolSetup, type SetupCommand } from '../../shared/setup'
 import './SchoolSetup.css'
 
@@ -7,10 +7,10 @@ const roleNames = { class_teacher: 'Guru Kelas', subject_teacher: 'Guru Subjek' 
 const levelName = (level: string) => level === 'PERALIHAN' ? 'Peralihan' : 'Tingkatan ' + level
 const className = (c: SchoolSetup['classes'][number]) => c.name + ' · ' + c.year
 
-async function request(email: string, signal?: AbortSignal, command?: SetupCommand) {
-  const user = auth.currentUser
-  if (!user || user.email?.toLowerCase() !== email) throw new Error('Sila log masuk semula.')
-  const headers = new Headers({ Authorization: 'Bearer ' + await user.getIdToken() })
+async function request(_email: string, signal?: AbortSignal, command?: SetupCommand) {
+  const token = getStoredSessionToken()
+  if (!token) throw new Error('Sila log masuk semula.')
+  const headers = new Headers({ Authorization: 'Bearer ' + token })
   if (command) headers.set('Content-Type', 'application/json')
   const response = await fetch('/api/admin/school-setup', {
     method: command ? 'POST' : 'GET', headers, signal,
@@ -126,14 +126,16 @@ export function SchoolSetupPanel({ email, page, onClassCreated }: { email: strin
         <>
           <section className="content-card">
             <h2>Daftar guru</h2>
-            <p>Guru log masuk dengan akaun Google DELIMa yang sama.</p>
+            <p>E-mel yang didaftarkan oleh setiausaha peperiksaan akan digunakan guru untuk log masuk sistem bersama kata laluan.</p>
             <form onSubmit={submit(d => ({
               action: 'teacher', email: field(d, 'email'), name: field(d, 'name'),
               roles: teacherRoles.filter(r => d.has(r)),
+              initialPassword: field(d, 'initialPassword') || 'Guru2027!',
             }), 'Guru berjaya didaftarkan.')}>
               <fieldset disabled={disabled} className="setup-fields">
                 <label>Nama guru<input name="name" autoComplete="off" required maxLength={120} /></label>
-                <label>E-mel DELIMa<input name="email" type="email" autoComplete="off" required maxLength={254} /></label>
+                <label>Alamat e-mel guru<input name="email" type="email" placeholder="cth: guru@gmail.com" autoComplete="off" required maxLength={254} /></label>
+                <label>Kata laluan awal<input name="initialPassword" defaultValue="Guru2027!" minLength={6} maxLength={100} required /></label>
                 <div className="setup-roles" role="group" aria-label="Peranan guru">
                   {teacherRoles.map(r => <label key={r}><input name={r} type="checkbox" />{roleNames[r]}</label>)}
                 </div>
@@ -142,7 +144,32 @@ export function SchoolSetupPanel({ email, page, onClassCreated }: { email: strin
             </form>
             <h3>Guru berdaftar ({setup.teachers.length})</h3>
             {setup.teachers.length ? <ul className="setup-list">{setup.teachers.map(t =>
-              <li key={t.id}><strong>{t.name}</strong><span>{t.email} · {t.roles.map(r => roleNames[r]).join(', ')}</span></li>,
+              <li key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <strong>{t.name}</strong>
+                  <span>{t.email} · {t.roles.map(r => roleNames[r]).join(', ')}</span>
+                  {t.locked && (
+                    <span style={{ color: '#dc2626', fontWeight: 600, display: 'block', fontSize: '12px' }}>
+                      [DISEKAT - 3 kali cubaan gagal]
+                    </span>
+                  )}
+                </div>
+                {t.locked && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    style={{ borderColor: '#ef4444', color: '#b91c1c' }}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (window.confirm(`Buka semula sekatan untuk ${t.name}?`)) {
+                        void save({ action: 'unlock', teacherId: t.id }, 'Sekatan akaun guru berjaya dibuka.')
+                      }
+                    }}
+                  >
+                    Buka Sekatan
+                  </button>
+                )}
+              </li>,
             )}</ul> : <p>Belum ada guru didaftarkan.</p>}
           </section>
           <section className="content-card">
