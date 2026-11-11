@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode, type FormEvent } from 'react'
 import {
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  onIdTokenChanged,
+  type User,
+} from 'firebase/auth'
+import { auth, googleProvider } from '../lib/firebase'
+import {
   AccountContext,
   getStoredSessionToken,
   setStoredSessionToken,
@@ -49,43 +57,48 @@ export function AuthGate({ children }: Props) {
     }
   }, [])
 
-  // Semak sesi tersimpan dan muat captcha pada permulaan
+  // Sahkan sesi dengan backend menggunakan Bearer Token (Firebase ID Token atau Session Token)
+  const verifyTokenWithBackend = useCallback(async (token: string, signal?: AbortSignal) => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+    })
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean
+      account?: AccountProfile
+      message?: string
+    } | null
+    return { ok: res.ok && data?.ok === true && Boolean(data.account), account: data?.account, message: data?.message }
+  }, [])
+
+  // Pantau status Firebase Auth dan sesi tersimpan
   useEffect(() => {
     isMounted.current = true
     const controller = new AbortController()
 
     async function initSession() {
+      // 1. Semak sama ada ada token tersimpan
       const storedToken = getStoredSessionToken()
       if (storedToken) {
         try {
-          const res = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${storedToken}`,
-            },
-            signal: controller.signal,
-          })
-          const data = (await res.json()) as { ok: boolean; account?: AccountProfile; message?: string }
+          const result = await verifyTokenWithBackend(storedToken, controller.signal)
           if (controller.signal.aborted) return
-
-          if (res.ok && data.ok && data.account) {
+          if (result.ok && result.account) {
             setSession({
               kind: 'signedIn',
-              account: data.account,
+              account: result.account,
               token: storedToken,
             })
             return
           }
-          setStoredSessionToken(null)
-          setSession({ kind: 'signedOut', error: data.message })
         } catch {
           if (controller.signal.aborted) return
-          setStoredSessionToken(null)
-          setSession({ kind: 'signedOut' })
         }
+        setStoredSessionToken(null)
       }
 
-      // Jika tiada sesi atau sesi telah luput, muatkan captcha
+      // 2. Jika tiada sesi aktif, muatkan captcha
       try {
         const res = await fetch('/api/auth/captcha', { signal: controller.signal, cache: 'no-store' })
         const data = (await res.json()) as { ok: boolean; key: string; svg: string }
@@ -96,16 +109,40 @@ export function AuthGate({ children }: Props) {
       } catch {
         // Abaikan pembatalan
       }
+      if (!controller.signal.aborted) {
+        setSession({ kind: 'signedOut' })
+      }
     }
 
     void initSession()
 
+    // Dengar perubahan token Firebase jika ada sesi Firebase aktif
+    const unsubscribe = onIdTokenChanged(auth, async (firebaseUser: User | null) => {
+      if (!isMounted.current || !firebaseUser) return
+      try {
+        const idToken = await firebaseUser.getIdToken()
+        const result = await verifyTokenWithBackend(idToken)
+        if (isMounted.current && result.ok && result.account) {
+          setStoredSessionToken(idToken)
+          setSession({
+            kind: 'signedIn',
+            account: result.account,
+            token: idToken,
+          })
+        }
+      } catch {
+        // Biarkan jika gagal verify token Firebase
+      }
+    })
+
     return () => {
       isMounted.current = false
       controller.abort()
+      unsubscribe()
     }
-  }, [])
+  }, [verifyTokenWithBackend])
 
+  // Log masuk menggunakan e-mel, kata laluan, dan captcha
   async function handleLogin(e: FormEvent) {
     e.preventDefault()
     if (busy) return
@@ -128,16 +165,32 @@ export function AuthGate({ children }: Props) {
     const reqId = ++activeReq.current
 
     try {
+      let firebaseToken: string | undefined
+
+      // Cuba log masuk ke Firebase Authentication terlebih dahulu jika disokong
+      try {
+        const cred = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword)
+        if (cred.user) {
+          firebaseToken = await cred.user.getIdToken()
+        }
+      } catch (fbErr: unknown) {
+        const code = (fbErr as { code?: string })?.code
+        // Jika Firebase melaporkan kata laluan salah secara khusus
+        if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+          // Teruskan ke backend untuk merekodkan cubaan gagal dan mengira baki cubaan (lockout)
+        }
+      }
+
+      // Hantar ke endpoint log masuk backend
       const res = await fetch('/api/auth/login', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: cleanEmail,
           password: cleanPassword,
           captchaKey,
           captchaAnswer: cleanCaptcha,
+          firebaseIdToken: firebaseToken,
         }),
       })
 
@@ -162,7 +215,6 @@ export function AuthGate({ children }: Props) {
           token: data.token,
         })
       } else {
-        // Segarkan captcha setiap kali cubaan gagal
         void refreshCaptcha()
         setSession({
           kind: 'signedOut',
@@ -183,10 +235,59 @@ export function AuthGate({ children }: Props) {
     }
   }
 
+  // Log masuk menggunakan Google (Firebase)
+  async function handleGoogleLogin() {
+    if (busy) return
+    setBusy(true)
+    const reqId = ++activeReq.current
+    try {
+      const cred = await signInWithPopup(auth, googleProvider)
+      if (!cred.user) throw new Error('Akaun Google tidak dipilih.')
+
+      const token = await cred.user.getIdToken(true)
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = (await res.json().catch(() => null)) as {
+        ok?: boolean
+        account?: AccountProfile
+        message?: string
+      } | null
+
+      if (!isMounted.current || activeReq.current !== reqId) return
+
+      if (res.ok && data?.ok && data.account) {
+        setStoredSessionToken(token)
+        setSession({
+          kind: 'signedIn',
+          account: data.account,
+          token,
+        })
+      } else {
+        await signOut(auth).catch(() => {})
+        setSession({
+          kind: 'signedOut',
+          error: data?.message || 'Akaun Google ini belum didaftarkan sebagai guru atau pentadbir.',
+        })
+      }
+    } catch (error: unknown) {
+      if (!isMounted.current || activeReq.current !== reqId) return
+      const code = (error as { code?: string })?.code
+      const msg = code === 'auth/popup-closed-by-user'
+        ? 'Tetingkap log masuk Google ditutup sebelum selesai.'
+        : 'Log masuk Google Firebase tidak berjaya. Sila cuba lagi.'
+      setSession({ kind: 'signedOut', error: msg })
+    } finally {
+      if (isMounted.current) setBusy(false)
+    }
+  }
+
   async function handleLogout() {
     setStoredSessionToken(null)
     setPassword('')
     setCaptchaAnswer('')
+    await signOut(auth).catch(() => {})
     setSession({ kind: 'signedOut' })
     void refreshCaptcha()
   }
@@ -323,7 +424,21 @@ export function AuthGate({ children }: Props) {
                 {busy ? 'Mengesahkan log masuk…' : 'Log Masuk'}
               </button>
 
-              <div className="login-footer-info">
+              <div className="login-divider" style={{ textAlign: 'center', margin: '8px 0', fontSize: '12px', color: '#94a3b8' }}>
+                <span>ATAU</span>
+              </div>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void handleGoogleLogin()}
+                disabled={busy}
+                style={{ width: '100%', padding: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+              >
+                <span>Log masuk dengan Google (Firebase)</span>
+              </button>
+
+              <div className="login-footer-info" style={{ marginTop: '12px' }}>
                 <small>Cubaan salah melebihi 3 kali akan menyekat akaun secara automatik.</small>
               </div>
             </form>

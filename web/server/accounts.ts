@@ -21,6 +21,23 @@ export function staffQueries(sql: NeonQueryFunction<false, false>, identity: Ver
 export async function findStaffAccount(identity: VerifiedIdentity): Promise<AccountProfile | null> {
   if (!process.env.DATABASE_URL) throw new AuthError(503, 'Konfigurasi pangkalan data belum tersedia.')
   const sql = neon(process.env.DATABASE_URL)
+
+  // Selaraskan account_identities dengan UID Firebase jika ada
+  if (identity.uid && identity.projectId) {
+    try {
+      await sql`
+        INSERT INTO account_identities (account_id, provider, project_id, subject)
+        SELECT a.id, 'firebase', ${identity.projectId}, ${identity.uid}
+        FROM accounts a
+        WHERE a.email = ${identity.email} AND a.active = true
+        ON CONFLICT (account_id, provider, project_id)
+        DO UPDATE SET subject = EXCLUDED.subject
+      `
+    } catch {
+      // Abaikan jika tiada konflik
+    }
+  }
+
   const rows = await sql`
     SELECT a.id, a.email, a.display_name, a.locked,
       array_agg(DISTINCT r.role ORDER BY r.role) AS roles

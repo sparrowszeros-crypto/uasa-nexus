@@ -16,14 +16,14 @@ export default async function handler(request: Request) {
   const contentType = request.headers.get('content-type') || ''
   const hasAuthHeader = Boolean(request.headers.get('authorization'))
 
-  // 1. Jika menghantar Authorization Bearer token (cth. pengesahan sesi berulang atau refresh)
+  // 1. Log masuk / pengesahan sesi menggunakan Authorization Bearer (Firebase ID Token atau Session Token)
   if (hasAuthHeader && !contentType.includes('application/json')) {
     try {
       const bearer = readBearer(request.headers.get('authorization'))
       const identity = requireStaffIdentity(await verifyAuthToken(bearer))
       const account = await findStaffAccount(identity)
       if (!account || !account.roles.length || !account.roles.every(isStaffRole)) {
-        throw new AuthError(403, 'Akaun tidak aktif, disekat, atau tiada peranan guru.')
+        throw new AuthError(403, 'Akaun tidak aktif, disekat, atau belum diberikan peranan guru. Hubungi setiausaha peperiksaan.')
       }
       return Response.json({ ok: true, account }, {
         headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -33,13 +33,14 @@ export default async function handler(request: Request) {
     }
   }
 
-  // 2. Log masuk baharu dengan Emel, Kata Laluan, dan Captcha
+  // 2. Log masuk menggunakan E-mel, Kata Laluan, dan Captcha
   try {
     const body = (await request.json().catch(() => null)) as {
       email?: unknown
       password?: unknown
       captchaKey?: unknown
       captchaAnswer?: unknown
+      firebaseIdToken?: unknown
     } | null
 
     if (!body || typeof body !== 'object') {
@@ -52,14 +53,15 @@ export default async function handler(request: Request) {
     const password = typeof body.password === 'string' ? body.password : ''
     const captchaKey = typeof body.captchaKey === 'string' ? body.captchaKey : ''
     const captchaAnswer = typeof body.captchaAnswer === 'string' ? body.captchaAnswer.trim() : ''
+    const firebaseIdToken = typeof body.firebaseIdToken === 'string' ? body.firebaseIdToken : ''
 
-    if (!email || !password) {
-      return Response.json({ ok: false, message: 'Sila masukkan e-mel dan kata laluan.' }, {
+    if (!email) {
+      return Response.json({ ok: false, message: 'Sila masukkan alamat e-mel.' }, {
         status: 400, headers: { 'Cache-Control': 'no-store' },
       })
     }
 
-    // Pengesahan Captcha
+    // Semakan Captcha
     if (!captchaKey || !captchaAnswer) {
       return Response.json({ ok: false, message: 'Sila lengkapkan kod keselamatan (captcha).' }, {
         status: 400, headers: { 'Cache-Control': 'no-store' },
@@ -103,7 +105,7 @@ export default async function handler(request: Request) {
       })
     }
 
-    // Semak sama ada akaun telah disekat
+    // Semak sekatan akaun
     if (account.locked) {
       return Response.json({
         ok: false,
@@ -114,7 +116,50 @@ export default async function handler(request: Request) {
       })
     }
 
-    // Semak kata laluan
+    // Jika telah disahkan melalui Firebase ID Token
+    if (firebaseIdToken) {
+      try {
+        const identity = requireStaffIdentity(await verifyAuthToken(firebaseIdToken))
+        if (identity.email.toLowerCase() !== email) {
+          throw new AuthError(401, 'E-mel token Firebase tidak sepadan.')
+        }
+
+        // Reset cubaan salah
+        if (account.failed_attempts > 0) {
+          await sql`UPDATE accounts SET failed_attempts = 0 WHERE id = ${account.id}`
+        }
+
+        const validRoles = Array.isArray(account.roles) ? account.roles.filter(isStaffRole) : []
+        if (!validRoles.length) {
+          return Response.json({
+            ok: false,
+            message: 'Akaun belum diberikan peranan guru atau pentadbir. Sila hubungi setiausaha peperiksaan.',
+          }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
+        }
+
+        const profile: AccountProfile = {
+          id: account.id,
+          email: account.email,
+          displayName: account.display_name,
+          roles: validRoles,
+        }
+
+        return Response.json({ ok: true, token: firebaseIdToken, account: profile }, {
+          headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+        })
+      } catch (err) {
+        if (err instanceof AuthError && err.status === 403) throw err
+        // Jika token Firebase tidak sah, teruskan semakan password tempatan
+      }
+    }
+
+    // Semak kata laluan tempatan
+    if (!password) {
+      return Response.json({ ok: false, message: 'Sila masukkan kata laluan.' }, {
+        status: 400, headers: { 'Cache-Control': 'no-store' },
+      })
+    }
+
     const isPasswordValid = verifyPassword(password, account.password_hash)
 
     if (!isPasswordValid) {
@@ -122,7 +167,6 @@ export default async function handler(request: Request) {
       const newFailed = currentAttempts + 1
 
       if (newFailed >= 3) {
-        // Kunci akaun serta-merta
         await sql`
           UPDATE accounts
           SET failed_attempts = ${newFailed}, locked = true, locked_at = now()
@@ -136,7 +180,6 @@ export default async function handler(request: Request) {
           status: 403, headers: { 'Cache-Control': 'no-store' },
         })
       } else {
-        // Rekod cubaan gagal
         await sql`
           UPDATE accounts
           SET failed_attempts = ${newFailed}
@@ -153,7 +196,7 @@ export default async function handler(request: Request) {
       }
     }
 
-    // Jika kata laluan betul, set semula failed_attempts kepada 0
+    // Jika kata laluan betul, set semula failed_attempts
     if (account.failed_attempts > 0) {
       await sql`
         UPDATE accounts
@@ -162,7 +205,6 @@ export default async function handler(request: Request) {
       `
     }
 
-    // Semak peranan
     const validRoles = Array.isArray(account.roles) ? account.roles.filter(isStaffRole) : []
     if (!validRoles.length) {
       return Response.json({
@@ -180,14 +222,14 @@ export default async function handler(request: Request) {
       roles: validRoles,
     }
 
-    const token = signSessionToken({
+    const sessionToken = signSessionToken({
       uid: account.id,
       email: account.email,
     })
 
     return Response.json({
       ok: true,
-      token,
+      token: sessionToken,
       account: profile,
     }, {
       headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },

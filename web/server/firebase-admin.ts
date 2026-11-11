@@ -1,45 +1,130 @@
-import { cert, getApps, initializeApp } from 'firebase-admin/app'
-import { getAuth } from 'firebase-admin/auth'
+import crypto from 'node:crypto'
 import { AuthError } from './auth-core.ts'
 import type { VerifiedIdentity } from './auth-core.ts'
 
-export async function verifyFirebaseToken(token: string): Promise<VerifiedIdentity> {
-  if (process.env.FIREBASE_AUTH_EMULATOR_HOST) {
-    throw new AuthError(503, 'Konfigurasi pengesahan pelayan tidak sesuai untuk log masuk sebenar.')
+const GOOGLE_CERTS_URL =
+  'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com'
+
+let cachedCerts: Record<string, string> | null = null
+let certsExpiryMs = 0
+
+async function fetchGooglePublicCerts(): Promise<Record<string, string>> {
+  const now = Date.now()
+  if (cachedCerts && now < certsExpiryMs) {
+    return cachedCerts
   }
-  let adminAuth
   try {
-    const encoded = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64
-    if (!encoded) throw new Error('missing-admin-config')
-    const credentials = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
-    if (credentials.type !== 'service_account' || !credentials.project_id ||
-        !credentials.private_key || !credentials.client_email) {
-      throw new Error('invalid-admin-config')
-    }
-    const app = getApps().find(app => app.name === 'uasa-nexus-auth') ??
-      initializeApp({
-        credential: cert(credentials),
-        projectId: credentials.project_id,
-      }, 'uasa-nexus-auth')
-    adminAuth = getAuth(app)
+    const res = await fetch(GOOGLE_CERTS_URL, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const cacheControl = res.headers.get('cache-control') || ''
+    const match = cacheControl.match(/max-age=(\d+)/)
+    const maxAgeSec = match ? parseInt(match[1], 10) : 3600
+    certsExpiryMs = now + maxAgeSec * 1000
+    cachedCerts = (await res.json()) as Record<string, string>
+    return cachedCerts
   } catch {
-    throw new AuthError(503, 'Konfigurasi Firebase pelayan belum lengkap.')
+    if (cachedCerts) return cachedCerts
+    throw new AuthError(503, 'Sijil pengesahan Google tidak dapat dimuatkan. Sila cuba lagi.')
   }
+}
+
+function base64UrlDecode(str: string): string {
+  return Buffer.from(str, 'base64url').toString('utf8')
+}
+
+function getExpectedProjectId(): string {
+  if (process.env.VITE_FIREBASE_PROJECT_ID) return process.env.VITE_FIREBASE_PROJECT_ID
+  if (process.env.FIREBASE_PROJECT_ID) return process.env.FIREBASE_PROJECT_ID
   try {
-    const decoded = await adminAuth.verifyIdToken(token, true)
-    return {
-      uid: decoded.uid,
-      email: decoded.email,
-      emailVerified: decoded.email_verified === true,
-      provider: decoded.firebase.sign_in_provider,
-      projectId: decoded.aud,
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64
+    if (raw) {
+      const parsed = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')) as { project_id?: string }
+      if (parsed.project_id) return parsed.project_id
+    }
+  } catch {
+    // Abaikan ralat parse
+  }
+  return 'uasa-nexus'
+}
+
+export async function verifyFirebaseToken(token: string): Promise<VerifiedIdentity> {
+  if (!token || typeof token !== 'string') {
+    throw new AuthError(401, 'Sila log masuk semula.')
+  }
+
+  const parts = token.split('.')
+  if (parts.length !== 3) {
+    throw new AuthError(401, 'Sesi tidak sah. Sila log masuk semula.')
+  }
+
+  const [rawHeader, rawPayload, rawSignature] = parts
+
+  let header: { alg?: string; kid?: string }
+  let payload: {
+    exp?: number
+    iss?: string
+    aud?: string
+    sub?: string
+    email?: string
+    email_verified?: boolean
+    firebase?: { sign_in_provider?: string }
+  }
+
+  try {
+    header = JSON.parse(base64UrlDecode(rawHeader)) as { alg?: string; kid?: string }
+    payload = JSON.parse(base64UrlDecode(rawPayload)) as typeof payload
+  } catch {
+    throw new AuthError(401, 'Format token tidak sah.')
+  }
+
+  if (header.alg !== 'RS256' || !header.kid) {
+    throw new AuthError(401, 'Algoritma token tidak sah.')
+  }
+
+  const now = Math.floor(Date.now() / 1000)
+  if (typeof payload.exp === 'number' && payload.exp < now) {
+    throw new AuthError(401, 'Sesi Firebase telah tamat tempoh. Sila log masuk semula.')
+  }
+
+  const expectedProjectId = getExpectedProjectId()
+  const expectedIssuer = `https://securetoken.google.com/${expectedProjectId}`
+
+  if (payload.iss !== expectedIssuer) {
+    throw new AuthError(401, 'Pengeluar token Firebase tidak sepadan.')
+  }
+
+  if (payload.aud !== expectedProjectId) {
+    throw new AuthError(401, 'Projek token Firebase tidak sah.')
+  }
+
+  if (!payload.sub || typeof payload.sub !== 'string') {
+    throw new AuthError(401, 'Identiti pengguna Firebase tidak sah.')
+  }
+
+  // Sahkan tandatangan menggunakan sijil awam Google rasmi
+  const certs = await fetchGooglePublicCerts()
+  const cert = certs[header.kid]
+  if (!cert) {
+    throw new AuthError(401, 'Sijil pengesahan tidak ditemui.')
+  }
+
+  try {
+    const verifier = crypto.createVerify('RSA-SHA256')
+    verifier.update(`${rawHeader}.${rawPayload}`)
+    const isValid = verifier.verify(cert, Buffer.from(rawSignature, 'base64url'))
+    if (!isValid) {
+      throw new AuthError(401, 'Tandatangan token Firebase tidak sah.')
     }
   } catch (error) {
-    const code = (error as { code?: string }).code
-    if (['auth/id-token-expired', 'auth/id-token-revoked', 'auth/user-disabled',
-         'auth/argument-error', 'auth/invalid-id-token', 'auth/user-not-found'].includes(code ?? '')) {
-      throw new AuthError(401, 'Sesi tidak sah atau telah tamat. Sila log masuk semula.')
-    }
-    throw new AuthError(503, 'Pengesahan Firebase tidak dapat diselesaikan. Sila cuba lagi.')
+    if (error instanceof AuthError) throw error
+    throw new AuthError(401, 'Pengesahan tandatangan gagal.')
+  }
+
+  return {
+    uid: payload.sub,
+    email: payload.email,
+    emailVerified: payload.email_verified === true,
+    provider: payload.firebase?.sign_in_provider || 'google.com',
+    projectId: payload.aud,
   }
 }
