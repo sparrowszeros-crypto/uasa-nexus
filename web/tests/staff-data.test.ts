@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { neon } from '@neondatabase/serverless'
 import { staffResults, staffScope } from '../server/staff-data.ts'
+import { readMarkRows, writeMarkRows } from '../server/exams.ts'
+import { readSlipRows } from '../server/slips.ts'
+import slipsHandler from '../netlify/functions/staff-slips.ts'
 import scopeHandler from '../netlify/functions/staff-scope.ts'
 import resultsHandler from '../netlify/functions/staff-results.ts'
 
@@ -9,6 +12,7 @@ test('staff routes reject anonymous requests and do not cache responses', async 
   for (const [handler, path] of [
     [scopeHandler, '/api/staff/scope'],
     [resultsHandler, '/api/staff/results'],
+    [slipsHandler, '/api/staff/slips'],
   ] as const) {
     const url = 'http://localhost' + path
     const denied = await handler(new Request(url))
@@ -35,11 +39,11 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
     staffResults(sql, actor(n), { examId, classId, subjectId })
   const tables = [
     'accounts', 'account_roles', 'account_identities', 'academic_years', 'classes',
-    'subjects', 'class_teachers', 'teaching_assignments', 'students', 'exams', 'exam_subjects', 'results',
+    'subjects', 'class_teachers', 'teaching_assignments', 'students', 'exams', 'exam_subjects', 'results', 'enrolments', 'audit_events',
   ]
   const fixtures = [
     ...tables.map(table => sql.query(
-      'CREATE TEMP TABLE ' + table + ' (LIKE public.' + table + ' INCLUDING DEFAULTS) ON COMMIT DROP',
+      'CREATE TEMP TABLE ' + table + ' (LIKE public.' + table + ' INCLUDING ALL) ON COMMIT DROP',
     )),
     ...[1, 2, 3, 4, 5].map(n => sql`
       INSERT INTO accounts (id, email, display_name, active)
@@ -60,6 +64,8 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
     sql`INSERT INTO teaching_assignments (account_id, class_id, subject_id) VALUES
       (${id(3)}, ${a}, ${math}), (${id(3)}, ${b}, ${language})`,
     sql`INSERT INTO students (id, student_number, full_name) VALUES (${pupil}, 'FIXTURE-1', 'Murid Contoh')`,
+    sql`INSERT INTO enrolments (student_id, academic_year_id, class_id, starts_on) VALUES
+      (${pupil}, ${yr}, ${a}, '2027-01-01')`,
     sql`INSERT INTO exams (id, academic_year_id, name, status, published_at) VALUES
       (${draft}, ${yr}, 'Draf', 'draft', NULL),
       (${published}, ${yr}, 'Diterbitkan', 'published', now()),
@@ -117,4 +123,54 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
     studentId: pupil, studentName: 'Murid Contoh', mark: 84, attendance: 'present',
   }])
   for (const i of [18, 22]) assert.deepEqual(rows[i][0], { staff: false, results: null })
+
+  const selection = { examId: draft, classId: a, subjectId: math }
+  const change = { studentId: pupil, mark: 0, attendance: 'present' } as const
+  const mixed = [change, { ...change, studentId: id(99) }]
+  const more = [
+    readMarkRows(sql, actor(1), { ...selection, classId: oldClass }),
+    writeMarkRows(sql, actor(3), { ...selection, entries: [change] }),
+    sql`UPDATE exams SET status = 'submitted' WHERE id = ${draft}`,
+    writeMarkRows(sql, actor(3), { ...selection, entries: mixed }),
+    readMarkRows(sql, actor(3), selection),
+    writeMarkRows(sql, actor(3), { ...selection, entries: [change] }),
+    writeMarkRows(sql, actor(3), { ...selection, entries: [change] }),
+    readMarkRows(sql, actor(3), selection),
+    writeMarkRows(sql, actor(3), { ...selection, subjectId: language, entries: [change] }),
+    writeMarkRows(sql, actor(3), { ...selection, examId: published, entries: [change] }),
+    readSlipRows(sql, actor(2), null, null, null),
+    readSlipRows(sql, actor(2), published, a, pupil),
+    readSlipRows(sql, actor(2), published, b, pupil),
+    readSlipRows(sql, actor(2), draft, a, pupil),
+    readSlipRows(sql, actor(3), published, a, pupil),
+    readSlipRows(sql, actor(2), future, a, pupil),
+    sql`SELECT count(*)::int AS count FROM audit_events WHERE event_type = 'result.saved'`,
+  ]
+  const newSubject = { ...selection, subjectId: id(70) }
+  more.push(
+    sql`INSERT INTO subjects (id,code,name) VALUES (${id(70)},'SAI','Sains')`,
+    readMarkRows(sql, actor(1), newSubject),
+    sql`SELECT count(*)::int AS count FROM exam_subjects WHERE subject_id = ${id(70)}`,
+    writeMarkRows(sql, actor(1), { ...newSubject, entries: [{ ...change, mark: null, attendance: 'absent' }] }),
+    readMarkRows(sql, actor(1), newSubject),
+  )
+  const checked = (await sql.transaction([...fixtures, ...more])).slice(fixtures.length).map(rows => rows[0])
+  assert.equal(checked[0].meta, null)
+  assert.deepEqual(checked[1], { status: 'draft', valid: false, saved: 0 })
+  assert.deepEqual(checked[3], { status: 'submitted', valid: false, saved: 0 })
+  assert.equal(checked[4].results[0].mark, 84)
+  assert.equal(checked[5].saved, 1)
+  assert.equal(checked[6].saved, 0)
+  assert.equal(checked[7].results[0].mark, 0)
+  assert.equal(checked[8].status, null)
+  assert.equal(checked[9].saved, 0)
+  assert.deepEqual(checked[10].options.map((o: { examId: string }) => o.examId), [published])
+  assert.equal(checked[11].pupil.id, pupil)
+  assert.equal(checked[11].subjects[0].mark, 85)
+  for (const i of [12, 13, 14, 15]) assert.equal(checked[i].pupil, null)
+  assert.equal(checked[16].count, 1)
+  assert.equal(checked[18].results[0].attendance, 'pending')
+  assert.equal(checked[19].count, 0)
+  assert.equal(checked[20].saved, 1)
+  assert.equal(checked[21].results[0].attendance, 'absent')
 })

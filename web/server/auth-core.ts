@@ -31,9 +31,10 @@ export function readBearer(header: string | null): string {
 }
 
 export function requireStaffIdentity(identity: VerifiedIdentity): VerifiedIdentity & { email: string } {
-  if (!identity.uid || !identity.projectId || !identity.email) {
+  if (!identity.uid || !identity.projectId || typeof identity.email !== 'string' || !identity.email.trim() || !identity.emailVerified) {
     throw new AuthError(401, 'Sila log masuk semula.')
   }
+  if (identity.provider !== 'google.com') throw new AuthError(403, 'Sila log masuk melalui Google.')
   return { ...identity, email: identity.email.toLowerCase().trim() }
 }
 

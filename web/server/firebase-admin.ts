@@ -62,6 +62,8 @@ export async function verifyFirebaseToken(token: string): Promise<VerifiedIdenti
   let header: { alg?: string; kid?: string }
   let payload: {
     exp?: number
+    iat?: number
+    auth_time?: number
     iss?: string
     aud?: string
     sub?: string
@@ -82,8 +84,13 @@ export async function verifyFirebaseToken(token: string): Promise<VerifiedIdenti
   }
 
   const now = Math.floor(Date.now() / 1000)
-  if (typeof payload.exp === 'number' && payload.exp < now) {
+  if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp) || payload.exp <= now) {
     throw new AuthError(401, 'Sesi Firebase telah tamat tempoh. Sila log masuk semula.')
+  }
+
+  if (typeof payload.iat !== 'number' || !Number.isFinite(payload.iat) || payload.iat > now
+    || typeof payload.auth_time !== 'number' || !Number.isFinite(payload.auth_time) || payload.auth_time > now) {
+    throw new AuthError(401, 'Masa token Firebase tidak sah.')
   }
 
   const expectedProjectId = getExpectedProjectId()
@@ -124,7 +131,7 @@ export async function verifyFirebaseToken(token: string): Promise<VerifiedIdenti
     uid: payload.sub,
     email: payload.email,
     emailVerified: payload.email_verified === true,
-    provider: payload.firebase?.sign_in_provider || 'google.com',
+    provider: payload.firebase?.sign_in_provider,
     projectId: payload.aud,
   }
 }

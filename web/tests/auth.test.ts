@@ -50,8 +50,8 @@ test('invalid or revoked token never reaches school database', async () => {
   assert.equal(touched, false)
 })
 
-test('missing-email or empty identity is denied before lookup', async () => {
-  for (const changes of [{ email: undefined }, { uid: '' }, { projectId: '' }]) {
+test('unverified or non-Google identity is denied before lookup', async () => {
+  for (const changes of [{ email: undefined }, { uid: '' }, { projectId: '' }, { emailVerified: false }, { provider: 'password' }]) {
     let touched = false
     await assert.rejects(authenticateStaff('Bearer verified', {
       verify: async () => ({ ...identity, ...changes }),

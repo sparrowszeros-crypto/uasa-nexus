@@ -17,8 +17,10 @@ export function staffActor(sql: Sql, identity: VerifiedIdentity) {
       bool_or(r.role = 'class_teacher') AS class_teacher,
       bool_or(r.role = 'subject_teacher') AS subject_teacher
     FROM accounts a
+    JOIN account_identities i ON i.account_id = a.id
     JOIN account_roles r ON r.account_id = a.id
     WHERE a.active AND a.email = ${identity.email}
+      AND i.provider = 'firebase' AND i.project_id = ${identity.projectId} AND i.subject = ${identity.uid}
       AND r.role IN ('exam_secretary', 'class_teacher', 'subject_teacher')
     GROUP BY a.id
   `

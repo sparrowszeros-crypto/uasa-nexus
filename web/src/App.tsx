@@ -5,6 +5,7 @@ import { ClassRoster } from './components/ClassRoster'
 import { SchoolSetupPanel } from './components/SchoolSetup'
 import { StaffScope } from './components/StaffScope'
 import { ExamsManagement } from './components/ExamsManagement'
+import { ExamSlips } from './components/ExamSlips'
 import { MarksEntry } from './components/MarksEntry'
 import { useAccount } from './lib/account-context'
 import type { AccountProfile } from '../shared/auth'
@@ -219,6 +220,8 @@ function Workspace({ account, logout }: { account: AccountProfile; logout: () =>
           <ExamsManagement email={account.email} />
         ) : (role === 'secretary' || role === 'subjectTeacher') && page === 'Markah' ? (
           <MarksEntry email={account.email} />
+        ) : (role === 'secretary' || role === 'classTeacher') && page === 'Slip Peperiksaan' ? (
+          <ExamSlips />
         ) : (
           <section className="content-card empty-state">
             <span className="empty-icon" aria-hidden="true">▤</span>

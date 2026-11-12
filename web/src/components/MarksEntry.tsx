@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
-import { getStoredSessionToken } from '../lib/account-context'
-import { calculateGrade, type Exam, type ExamSubjectResultData } from '../../shared/exams'
+import { auth } from '../lib/firebase'
+import { calculateGrade, type Exam, type ExamSubjectResultData, type StudentResultEntry } from '../../shared/exams'
 import './SchoolSetup.css'
 
 interface Scope {
@@ -40,23 +40,35 @@ export function MarksEntry({ email }: { email?: string }) {
   const [loadingInitial, setLoadingInitial] = useState(true)
   const [loadingResults, setLoadingResults] = useState(false)
   const [saving, setSaving] = useState(false)
+  const year = exams.find(exam => exam.id === selectedExamId)?.year
+  const classesForYear = allClasses.filter(c => c.year === year)
+  const assignmentsForYear = scope?.subjectAssignments.filter(a => a.year === year) ?? []
+  const selectionMatches = resultData?.examId === selectedExamId && resultData.classId === selectedClassId
+    && resultData.subjectId === selectedSubjectId
+  const original = useMemo(() => new Map<string, StudentResultEntry>(resultData?.results.map(r => [r.studentId, r])), [resultData])
+  const changes = entries.filter(e => {
+    const row = original.get(e.studentId)
+    return row && (row.mark !== e.mark || row.attendance !== e.attendance)
+  })
   const [notice, setNotice] = useState<{ ok: boolean; text: string }>()
 
   // 1. Muatkan peperiksaan dan skop guru
   useEffect(() => {
-    const token = getStoredSessionToken()
-    if (!token) return
-
+    const controller = new AbortController()
     async function loadInit() {
       try {
+        const token = await auth.currentUser?.getIdToken()
+        if (!token) throw new Error('Sesi telah tamat.')
         const [resExams, resScope] = await Promise.all([
-          fetch('/api/staff/exams', { headers: { Authorization: `Bearer ${token}` } }),
-          fetch('/api/staff/scope', { headers: { Authorization: `Bearer ${token}` } }),
+          fetch('/api/staff/exams', { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }),
+          fetch('/api/staff/scope', { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }),
         ])
 
         const dataExams = (await resExams.json()) as { exams?: Exam[] }
         const dataScope = (await resScope.json()) as { scope?: Scope }
 
+        if (!resExams.ok || !resScope.ok || !dataExams.exams || !dataScope.scope) throw new Error()
+        const initialYear = dataExams.exams[0]?.year
         if (dataExams.exams) {
           setExams(dataExams.exams)
           if (dataExams.exams.length > 0) {
@@ -68,29 +80,33 @@ export function MarksEntry({ email }: { email?: string }) {
           setScope(dataScope.scope)
           if (dataScope.scope.schoolWide) {
             // Setiausaha: muatkan semua kelas & subjek dari setup
-            const resSetup = await fetch('/api/admin/school-setup', { headers: { Authorization: `Bearer ${token}` } })
-            const dataSetup = (await resSetup.json()) as { setup?: { classes: Scope['classes']; subjects: { id: string; name: string; code: string }[] } }
+            const resSetup = await fetch('/api/admin/school-setup', { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal })
+            const dataSetup = (await resSetup.json()) as { setup?: { classes: Scope['classes']; subjects: { id: string; name: string; code: string; active: boolean }[] } }
+            if (!resSetup.ok || !dataSetup.setup) throw new Error()
             if (dataSetup.setup) {
               setAllClasses(dataSetup.setup.classes || [])
-              setAllSubjects(dataSetup.setup.subjects || [])
-              if (dataSetup.setup.classes.length > 0) setSelectedClassId(dataSetup.setup.classes[0].id)
-              if (dataSetup.setup.subjects.length > 0) setSelectedSubjectId(dataSetup.setup.subjects[0].id)
+              const activeSubjects = dataSetup.setup.subjects.filter(s => s.active)
+              setAllSubjects(activeSubjects)
+              setSelectedClassId(dataSetup.setup.classes.find(c => c.year === initialYear)?.id ?? '')
+              setSelectedSubjectId(activeSubjects[0]?.id ?? '')
             }
           } else if (dataScope.scope.subjectAssignments.length > 0) {
             // Guru Subjek: pilih penugasan pertama
-            const first = dataScope.scope.subjectAssignments[0]
+            const first = dataScope.scope.subjectAssignments.find(a => a.year === initialYear)
+            if (!first) return
             setSelectedClassId(first.classId)
             setSelectedSubjectId(first.subjectId)
           }
         }
       } catch {
-        setNotice({ ok: false, text: 'Gagal memuatkan data awal peperiksaan.' })
+        if (!controller.signal.aborted) setNotice({ ok: false, text: 'Gagal memuatkan data awal peperiksaan.' })
       } finally {
-        setLoadingInitial(false)
+        if (!controller.signal.aborted) setLoadingInitial(false)
       }
     }
 
     void loadInit()
+    return () => controller.abort()
   }, [])
 
   // 2. Muatkan senarai murid & markah apabila pilihan berubah
@@ -102,13 +118,12 @@ export function MarksEntry({ email }: { email?: string }) {
         return
       }
 
-      const token = getStoredSessionToken()
-      if (!token) return
-
-      setLoadingResults(true)
-      setNotice(undefined)
-
       try {
+        const token = await auth.currentUser?.getIdToken()
+        if (!token) throw new Error('Sesi telah tamat.')
+        if (controller.signal.aborted) return
+        setLoadingResults(true)
+        setNotice(undefined)
         const url = `/api/staff/results?examId=${encodeURIComponent(selectedExamId)}&classId=${encodeURIComponent(selectedClassId)}&subjectId=${encodeURIComponent(selectedSubjectId)}`
         const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal })
         const data = (await res.json()) as { ok: boolean; data?: ExamSubjectResultData; message?: string }
@@ -148,6 +163,15 @@ export function MarksEntry({ email }: { email?: string }) {
     return () => controller.abort()
   }, [selectedExamId, selectedClassId, selectedSubjectId])
 
+  function changeSelection() {
+    if (selectionMatches && changes.length && !window.confirm('Buang perubahan markah yang belum disimpan?')) return false
+    setResultData(null)
+    setEntries([])
+    setNotice(undefined)
+    setLoadingResults(false)
+    return true
+  }
+
   // Tukar markah murid
   function handleMarkChange(index: number, valStr: string) {
     setEntries((prev) => {
@@ -157,7 +181,7 @@ export function MarksEntry({ email }: { email?: string }) {
       } else {
         const num = parseFloat(valStr)
         if (!isNaN(num)) {
-          const clamped = Math.min(100, Math.max(0, num))
+          const clamped = Math.round(Math.min(100, Math.max(0, num)) * 100) / 100
           copy[index] = { ...copy[index], mark: clamped, attendance: 'present' }
         }
       }
@@ -172,7 +196,7 @@ export function MarksEntry({ email }: { email?: string }) {
       if (att === 'absent') {
         copy[index] = { ...copy[index], attendance: 'absent', mark: null }
       } else {
-        copy[index] = { ...copy[index], attendance: 'present', mark: copy[index].mark ?? 0 }
+        copy[index] = { ...copy[index], attendance: copy[index].mark === null ? 'pending' : 'present' }
       }
       return copy
     })
@@ -180,14 +204,14 @@ export function MarksEntry({ email }: { email?: string }) {
 
   // 3. Simpan markah ke pelayan
   async function handleSave() {
-    if (saving || !selectedExamId || !selectedClassId || !selectedSubjectId) return
-    const token = getStoredSessionToken()
-    if (!token) return
+    if (saving || !selectionMatches || !changes.length || isReadOnly) return
 
     setSaving(true)
     setNotice(undefined)
 
     try {
+      const token = await auth.currentUser?.getIdToken()
+      if (!token) throw new Error('Sesi telah tamat.')
       const res = await fetch('/api/staff/results', {
         method: 'POST',
         headers: {
@@ -198,7 +222,7 @@ export function MarksEntry({ email }: { email?: string }) {
           examId: selectedExamId,
           classId: selectedClassId,
           subjectId: selectedSubjectId,
-          entries: entries.map((e) => ({
+          entries: changes.map((e) => ({
             studentId: e.studentId,
             mark: e.mark,
             attendance: e.attendance,
@@ -208,6 +232,9 @@ export function MarksEntry({ email }: { email?: string }) {
 
       const data = (await res.json()) as { ok: boolean; message?: string }
       if (res.ok && data.ok) {
+        setResultData(current => current && ({ ...current, results: entries.map(entry => ({
+          ...entry, grade: calculateGrade(entry.mark, entry.attendance),
+        })) }))
         setNotice({ ok: true, text: 'Markah berjaya disimpan ke pangkalan data.' })
       } else {
         setNotice({ ok: false, text: data.message || 'Gagal menyimpan markah.' })
@@ -242,7 +269,7 @@ export function MarksEntry({ email }: { email?: string }) {
     return { total: entries.length, presentCount, absentCount, average, gradeCounts }
   }, [entries])
 
-  const isReadOnly = resultData?.examStatus === 'published'
+  const isReadOnly = resultData?.examStatus !== 'submitted'
 
   return (
     <div className="setup-panel">
@@ -264,13 +291,20 @@ export function MarksEntry({ email }: { email?: string }) {
               Peperiksaan
               <select
                 value={selectedExamId}
-                onChange={(e) => setSelectedExamId(e.target.value)}
-                disabled={exams.length === 0}
+                onChange={(e) => {
+                  if (!changeSelection()) return
+                  const exam = exams.find(item => item.id === e.target.value)
+                  const assignment = scope?.subjectAssignments.find(a => a.year === exam?.year)
+                  setSelectedExamId(e.target.value)
+                  setSelectedClassId(scope?.schoolWide ? allClasses.find(c => c.year === exam?.year)?.id ?? '' : assignment?.classId ?? '')
+                  if (!scope?.schoolWide) setSelectedSubjectId(assignment?.subjectId ?? '')
+                }}
+                disabled={saving || exams.length === 0}
               >
                 {exams.length === 0 && <option value="">Tiada peperiksaan dibuka</option>}
                 {exams.map((ex) => (
                   <option key={ex.id} value={ex.id}>
-                    {ex.name} ({ex.year}) — {ex.status === 'published' ? 'Diterbitkan' : 'Dibuka'}
+                    {ex.name} ({ex.year}) — {ex.status === 'published' ? 'Diterbitkan' : ex.status === 'submitted' ? 'Dibuka' : 'Ditutup'}
                   </option>
                 ))}
               </select>
@@ -282,9 +316,11 @@ export function MarksEntry({ email }: { email?: string }) {
                   Kelas (Pentadbir)
                   <select
                     value={selectedClassId}
-                    onChange={(e) => setSelectedClassId(e.target.value)}
+                    disabled={saving || !classesForYear.length}
+                    onChange={(e) => { if (changeSelection()) setSelectedClassId(e.target.value) }}
                   >
-                    {allClasses.map((c) => (
+                    {!classesForYear.length && <option value="">Tiada kelas untuk sesi ini</option>}
+                    {classesForYear.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name} · {c.year}
                       </option>
@@ -296,8 +332,10 @@ export function MarksEntry({ email }: { email?: string }) {
                   Subjek (Pentadbir)
                   <select
                     value={selectedSubjectId}
-                    onChange={(e) => setSelectedSubjectId(e.target.value)}
+                    disabled={saving || !allSubjects.length}
+                    onChange={(e) => { if (changeSelection()) setSelectedSubjectId(e.target.value) }}
                   >
+                    {!allSubjects.length && <option value="">Tiada subjek aktif</option>}
                     {allSubjects.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name} ({s.code})
@@ -310,16 +348,17 @@ export function MarksEntry({ email }: { email?: string }) {
               <label style={{ gridColumn: 'span 2' }}>
                 Tugasan Kelas & Subjek Anda
                 <select
-                  value={`${selectedClassId}:::${selectedSubjectId}`}
+                  value={selectedClassId && selectedSubjectId ? `${selectedClassId}:::${selectedSubjectId}` : ''}
                   onChange={(e) => {
+                    if (!changeSelection()) return
                     const [cId, sId] = e.target.value.split(':::')
                     setSelectedClassId(cId)
                     setSelectedSubjectId(sId)
                   }}
-                  disabled={!scope?.subjectAssignments.length}
+                  disabled={saving || !assignmentsForYear.length}
                 >
-                  {!scope?.subjectAssignments.length && <option value="">Tiada penugasan subjek</option>}
-                  {scope?.subjectAssignments.map((a) => (
+                  {!assignmentsForYear.length && <option value="">Tiada penugasan untuk sesi ini</option>}
+                  {assignmentsForYear.map((a) => (
                     <option key={`${a.classId}:::${a.subjectId}`} value={`${a.classId}:::${a.subjectId}`}>
                       {a.className} · {a.subjectName}
                     </option>
@@ -338,19 +377,19 @@ export function MarksEntry({ email }: { email?: string }) {
               <h3 style={{ margin: 0 }}>
                 {resultData ? `${resultData.className} · ${resultData.subjectName} (${resultData.subjectCode})` : 'Senarai Markah'}
               </h3>
-              {isReadOnly && (
+              {selectionMatches && isReadOnly && (
                 <span style={{ fontSize: '12px', color: '#dc2626', fontWeight: 600 }}>
-                  [Peperiksaan ini telah diterbitkan. Markah dalam mod baca sahaja]
+                  Kemasukan markah ditutup untuk peperiksaan ini.
                 </span>
               )}
             </div>
 
-            {!isReadOnly && entries.length > 0 && (
+            {selectionMatches && !isReadOnly && entries.length > 0 && (
               <button
                 type="button"
                 className="secondary-button"
                 style={{ backgroundColor: '#18564c', color: 'white', borderColor: '#18564c' }}
-                disabled={saving}
+                disabled={saving || !changes.length}
                 onClick={() => void handleSave()}
               >
                 {saving ? 'Menyimpan…' : 'Simpan Markah'}
@@ -359,7 +398,7 @@ export function MarksEntry({ email }: { email?: string }) {
           </div>
 
           {/* Ringkasan Statistik */}
-          {entries.length > 0 && (
+          {selectionMatches && entries.length > 0 && (
             <div
               style={{
                 display: 'grid',
@@ -388,9 +427,9 @@ export function MarksEntry({ email }: { email?: string }) {
             </div>
           )}
 
-          {loadingResults ? (
+          {loadingResults || (!selectionMatches && !notice) ? (
             <p role="status">Memuatkan senarai murid dan markah…</p>
-          ) : entries.length === 0 ? (
+          ) : !selectionMatches ? null : entries.length === 0 ? (
             <p>Tiada murid aktif didaftarkan dalam kelas ini.</p>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -423,11 +462,12 @@ export function MarksEntry({ email }: { email?: string }) {
                         <td style={{ padding: '10px 8px', fontWeight: 500 }}>{entry.studentName}</td>
                         <td style={{ padding: '10px 8px' }}>
                           <select
-                            value={isAbsent ? 'absent' : 'present'}
+                            value={entry.attendance}
                             disabled={isReadOnly || saving}
                             onChange={(e) => handleAttendanceChange(idx, e.target.value as 'present' | 'absent')}
                             style={{ padding: '4px 6px', fontSize: '13px', borderRadius: '4px' }}
                           >
+                            <option value="pending" disabled>Belum diisi</option>
                             <option value="present">Hadir</option>
                             <option value="absent">TH</option>
                           </select>

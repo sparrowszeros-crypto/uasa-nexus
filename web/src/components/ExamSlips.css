@@ -1,0 +1,33 @@
+.exam-slip {
+  max-width: 48rem;
+  margin-top: 1rem;
+  padding: 1.25rem;
+  border: 1px solid #a6b9ba;
+  background: white;
+}
+.exam-slip dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: .4rem .9rem;
+}
+.exam-slip dt { font-weight: 600; }
+.exam-slip dd { margin: 0; overflow-wrap: anywhere; }
+.exam-slip table { width: 100%; border-collapse: collapse; }
+.exam-slip th, .exam-slip td { padding: .5rem; border: 1px solid #a6b9ba; text-align: left; }
+@media print {
+  @page { size: A4; margin: 15mm; }
+  body:has(#uasa-slip) { background: white; }
+  body:has(#uasa-slip) #root * { visibility: hidden; }
+  body:has(#uasa-slip) #uasa-slip, body:has(#uasa-slip) #uasa-slip * { visibility: visible; }
+  body:has(#uasa-slip) #uasa-slip {
+    position: absolute;
+    inset: 0 0 auto;
+    box-sizing: border-box;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    color: black;
+  }
+  .exam-slip tr { break-inside: avoid; }
+}

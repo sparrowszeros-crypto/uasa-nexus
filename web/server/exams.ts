@@ -116,66 +116,95 @@ export async function updateExamStatus(
   if (!r?.updated) throw new AuthError(404, 'Peperiksaan tidak ditemui.')
 }
 
+export function markSelection(sql: Sql, identity: VerifiedIdentity, selection: {
+  examId: string; classId: string; subjectId: string
+}, lock = false) {
+  return sql`
+    SELECT e.id AS exam_id, e.academic_year_id, e.name AS exam_name, e.status AS exam_status,
+      c.id AS class_id, c.name AS class_name, s.id AS subject_id, s.name AS subject_name,
+      s.code AS subject_code, a.id AS actor_id
+    FROM (${staffActor(sql, identity)}) a
+    JOIN exams e ON e.id = ${selection.examId}
+    JOIN classes c ON c.id = ${selection.classId} AND c.academic_year_id = e.academic_year_id
+    JOIN subjects s ON s.id = ${selection.subjectId}
+    WHERE (s.active OR e.status = 'published') AND (a.secretary OR (a.subject_teacher AND EXISTS (
+      SELECT 1 FROM teaching_assignments t
+      WHERE t.account_id = a.id AND t.class_id = c.id AND t.subject_id = s.id
+    )))
+    ${lock ? sql`FOR NO KEY UPDATE OF e` : sql``}
+  `
+}
+
+export function readMarkRows(sql: Sql, identity: VerifiedIdentity, selection: {
+  examId: string; classId: string; subjectId: string
+}) {
+  return sql`
+    WITH selection AS (${markSelection(sql, identity, selection)}), pupils AS (
+      SELECT p.id AS student_id, p.full_name AS student_name, p.student_number,
+        r.mark, COALESCE(r.attendance, 'pending') AS attendance
+      FROM selection m
+      JOIN students p ON EXISTS (
+        SELECT 1 FROM enrolments en
+        WHERE en.class_id = m.class_id AND en.academic_year_id = m.academic_year_id
+          AND en.student_id = p.id AND en.ends_on IS NULL AND p.status = 'active'
+      ) OR EXISTS (
+        SELECT 1 FROM exam_subjects es JOIN results r ON r.exam_subject_id = es.id
+        WHERE es.exam_id = m.exam_id AND es.class_id = m.class_id AND es.subject_id = m.subject_id
+          AND r.student_id = p.id AND m.exam_status = 'published'
+      )
+      LEFT JOIN exam_subjects es ON es.exam_id = m.exam_id AND es.class_id = m.class_id AND es.subject_id = m.subject_id
+      LEFT JOIN results r ON r.exam_subject_id = es.id AND r.student_id = p.id
+    )
+    SELECT (SELECT to_jsonb(selection) FROM selection) AS meta,
+      COALESCE((SELECT jsonb_agg(to_jsonb(pupils) ORDER BY student_name, student_number) FROM pupils), '[]') AS results
+  `
+}
+
+export function writeMarkRows(sql: Sql, identity: VerifiedIdentity, payload: SaveMarksPayload) {
+  return sql`
+    WITH selection AS MATERIALIZED (${markSelection(sql, identity, payload, true)}),
+    incoming AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(payload.entries)}::jsonb)
+        AS x("studentId" uuid, mark numeric, attendance text)
+    ), valid AS (
+      SELECT m.* FROM selection m
+      WHERE m.exam_status = 'submitted' AND NOT EXISTS (
+        SELECT 1 FROM incoming x WHERE NOT EXISTS (
+          SELECT 1 FROM enrolments en JOIN students p ON p.id = en.student_id
+          WHERE en.student_id = x."studentId" AND en.class_id = m.class_id
+            AND en.academic_year_id = m.academic_year_id AND en.ends_on IS NULL AND p.status = 'active'
+        )
+      )
+    ), offered AS (
+      INSERT INTO exam_subjects (exam_id, academic_year_id, class_id, subject_id)
+      SELECT exam_id, academic_year_id, class_id, subject_id FROM valid
+      ON CONFLICT (exam_id, class_id, subject_id) DO UPDATE SET subject_id = EXCLUDED.subject_id
+      RETURNING id
+    ), changed AS (
+      INSERT INTO results (exam_subject_id, student_id, mark, attendance, updated_by)
+      SELECT o.id, x."studentId", x.mark, x.attendance, m.actor_id
+      FROM offered o CROSS JOIN incoming x CROSS JOIN valid m
+      ON CONFLICT (exam_subject_id, student_id) DO UPDATE
+      SET mark = EXCLUDED.mark, attendance = EXCLUDED.attendance, updated_by = EXCLUDED.updated_by,
+        updated_at = now(), version = results.version + 1
+      WHERE (results.mark, results.attendance) IS DISTINCT FROM (EXCLUDED.mark, EXCLUDED.attendance)
+      RETURNING id, exam_subject_id, student_id, mark, attendance
+    ), audit AS (
+      INSERT INTO audit_events (actor_id, event_type, entity_type, entity_id, after_value)
+      SELECT m.actor_id, 'result.saved', 'result', c.id, to_jsonb(c)
+      FROM changed c CROSS JOIN valid m
+    )
+    SELECT (SELECT exam_status FROM selection) AS status,
+      EXISTS(SELECT 1 FROM valid) AS valid, (SELECT count(*)::int FROM changed) AS saved
+  `
+}
+
 export async function getExamSubjectResults(
   sql: Sql,
   identity: VerifiedIdentity,
   selection: { examId: string; classId: string; subjectId: string },
 ): Promise<ExamSubjectResultData> {
-  const actor = sql`SELECT id, secretary, subject_teacher FROM (${staffActor(sql, identity)}) staff`
-
-  // Pastikan exam_subjects wujud bagi gabungan ini
-  await sql`
-    WITH actor AS (${actor}),
-    exam_info AS (
-      SELECT e.id AS exam_id, e.academic_year_id
-      FROM exams e
-      WHERE e.id = ${selection.examId}
-    )
-    INSERT INTO exam_subjects (exam_id, academic_year_id, class_id, subject_id)
-    SELECT e.exam_id, e.academic_year_id, ${selection.classId}, ${selection.subjectId}
-    FROM exam_info e
-    WHERE EXISTS (SELECT 1 FROM actor a WHERE a.secretary OR (a.subject_teacher AND EXISTS (
-      SELECT 1 FROM teaching_assignments t
-      WHERE t.account_id = a.id AND t.class_id = ${selection.classId} AND t.subject_id = ${selection.subjectId}
-    )))
-    ON CONFLICT (exam_id, class_id, subject_id) DO NOTHING
-  `
-
-  // Dapatkan maklumat peperiksaan, kelas, subjek, serta murid dan markah semasa
-  const rows = await sql`
-    WITH actor AS (${actor}),
-    es AS (
-      SELECT es.id AS exam_subject_id, e.id AS exam_id, e.name AS exam_name, e.status AS exam_status,
-        c.id AS class_id, c.name AS class_name, s.id AS subject_id, s.name AS subject_name, s.code AS subject_code
-      FROM exam_subjects es
-      JOIN exams e ON e.id = es.exam_id
-      JOIN classes c ON c.id = es.class_id
-      JOIN subjects s ON s.id = es.subject_id
-      WHERE es.exam_id = ${selection.examId}
-        AND es.class_id = ${selection.classId}
-        AND es.subject_id = ${selection.subjectId}
-        AND EXISTS (SELECT 1 FROM actor a WHERE a.secretary OR (a.subject_teacher AND EXISTS (
-          SELECT 1 FROM teaching_assignments t
-          WHERE t.account_id = a.id AND t.class_id = c.id AND t.subject_id = s.id
-        )))
-    ),
-    pupils AS (
-      SELECT p.id AS student_id, p.full_name AS student_name, p.student_number,
-        r.mark, COALESCE(r.attendance, 'pending') AS attendance
-      FROM enrolments en
-      JOIN students p ON p.id = en.student_id
-      CROSS JOIN es
-      LEFT JOIN results r ON r.exam_subject_id = es.exam_subject_id AND r.student_id = p.id
-      WHERE en.class_id = es.class_id
-        AND en.ends_on IS NULL
-        AND p.status = 'active'
-      ORDER BY p.full_name, p.student_number
-    )
-    SELECT
-      (SELECT to_jsonb(es) FROM es) AS meta,
-      COALESCE((SELECT jsonb_agg(to_jsonb(pupils)) FROM pupils), '[]'::jsonb) AS results
-  `
-
+  const rows = await readMarkRows(sql, identity, selection)
   const r = rows[0]
   if (!r?.meta) {
     throw new AuthError(403, 'Akses kemasukan markah tidak dibenarkan atau subjek belum ditugaskan.')
@@ -224,70 +253,10 @@ export async function getExamSubjectResults(
   }
 }
 
-export async function saveMarks(
-  sql: Sql,
-  identity: VerifiedIdentity,
-  payload: SaveMarksPayload,
-): Promise<{ savedCount: number }> {
-  const actor = sql`SELECT id, secretary, subject_teacher FROM (${staffActor(sql, identity)}) staff`
-
-  // Dapatkan exam_subject_id
-  const esRows = await sql`
-    WITH actor AS (${actor})
-    SELECT es.id, e.status AS exam_status, a.id AS actor_id
-    FROM exam_subjects es
-    JOIN exams e ON e.id = es.exam_id
-    CROSS JOIN actor a
-    WHERE es.exam_id = ${payload.examId}
-      AND es.class_id = ${payload.classId}
-      AND es.subject_id = ${payload.subjectId}
-      AND (a.secretary OR (a.subject_teacher AND EXISTS (
-        SELECT 1 FROM teaching_assignments t
-        WHERE t.account_id = a.id AND t.class_id = ${payload.classId} AND t.subject_id = ${payload.subjectId}
-      )))
-  `
-
-  const es = esRows[0]
-  if (!es) throw new AuthError(403, 'Akses simpan markah tidak dibenarkan untuk pilihan ini.')
-  if (es.exam_status === 'published') {
-    throw new AuthError(400, 'Peperiksaan telah diterbitkan. Markah tidak boleh diubah.')
-  }
-
-  let count = 0
-  for (const entry of payload.entries) {
-    let markValue: number | null = null
-    let attendanceValue = entry.attendance
-
-    if (attendanceValue === 'present') {
-      if (entry.mark !== null && entry.mark !== undefined && !isNaN(entry.mark)) {
-        markValue = Math.min(100, Math.max(0, Math.round(entry.mark * 100) / 100))
-      } else {
-        attendanceValue = 'pending'
-      }
-    } else if (attendanceValue !== 'absent') {
-      attendanceValue = 'pending'
-    }
-
-    await sql`
-      INSERT INTO results (exam_subject_id, student_id, mark, attendance, updated_by, updated_at, version)
-      VALUES (${es.id}, ${entry.studentId}, ${markValue}, ${attendanceValue}, ${es.actor_id}, now(), 1)
-      ON CONFLICT (exam_subject_id, student_id)
-      DO UPDATE SET
-        mark = EXCLUDED.mark,
-        attendance = EXCLUDED.attendance,
-        updated_by = EXCLUDED.updated_by,
-        updated_at = now(),
-        version = results.version + 1
-    `
-    count++
-  }
-
-  // Rekod audit event
-  await sql`
-    INSERT INTO audit_events (actor_id, event_type, entity_type, entity_id, after_value)
-    VALUES (${es.actor_id}, 'results.updated', 'exam_subject', ${es.id},
-      jsonb_build_object('examId', ${payload.examId}, 'classId', ${payload.classId}, 'subjectId', ${payload.subjectId}, 'savedEntries', ${count}))
-  `
-
-  return { savedCount: count }
+export async function saveMarks(sql: Sql, identity: VerifiedIdentity, payload: SaveMarksPayload) {
+  const [result] = await writeMarkRows(sql, identity, payload)
+  if (!result.status) throw new AuthError(403, 'Akses simpan markah tidak dibenarkan untuk pilihan ini.')
+  if (result.status !== 'submitted') throw new AuthError(409, 'Kemasukan markah ditutup untuk peperiksaan ini.')
+  if (!result.valid) throw new AuthError(409, 'Senarai murid telah berubah. Muat semula sebelum menyimpan.')
+  return { savedCount: Number(result.saved) }
 }
