@@ -5,6 +5,7 @@ import { ClassRoster } from './components/ClassRoster'
 import { SchoolSetupPanel } from './components/SchoolSetup'
 import { StaffScope } from './components/StaffScope'
 import { ExamsManagement } from './components/ExamsManagement'
+import { ExamAnalysis } from './components/ExamAnalysis'
 import { ExamSlips } from './components/ExamSlips'
 import { MarksEntry } from './components/MarksEntry'
 import { useAccount } from './lib/account-context'
@@ -56,7 +57,7 @@ const moduleDescriptions: Record<string, string> = {
   Markah:
     'Kemasukan markah, semakan dan penghantaran untuk pengesahan.',
   Analisis:
-    'Analisis pencapaian mengikut murid, kelas dan subjek.',
+    'Semakan markah belum lengkap dan pencapaian mengikut kelas serta subjek.',
   'Slip Peperiksaan':
     'Paparan keputusan dan cetakan slip peperiksaan A4.',
   'Anak Saya':
@@ -220,6 +221,8 @@ function Workspace({ account, logout }: { account: AccountProfile; logout: () =>
           <ExamsManagement email={account.email} />
         ) : (role === 'secretary' || role === 'subjectTeacher') && page === 'Markah' ? (
           <MarksEntry email={account.email} />
+        ) : role === 'secretary' && page === 'Analisis' ? (
+          <ExamAnalysis />
         ) : (role === 'secretary' || role === 'classTeacher') && page === 'Slip Peperiksaan' ? (
           <ExamSlips />
         ) : (
