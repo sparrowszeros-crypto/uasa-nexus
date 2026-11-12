@@ -191,7 +191,7 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
   assert.equal(checked[21].results[0].attendance, 'absent')
   assert.ok(checked[25].exams.some((exam: { id: string }) => exam.id === draft))
   assert.equal(checked[26], undefined)
-  assert.deepEqual(checked[27], { allowed: false, examExists: false, groupExists: false, rows: [], pupils: [] })
+  assert.deepEqual(checked[27], { allowed: false, examExists: false, groupExists: false, candidates: [], rows: [], pupils: [] })
   const report = (checked[28].rows as Parameters<typeof summarizeAnalysis>[0][]).map(summarizeAnalysis)
   const zero = report.find(row => row.classId === a && row.subjectId === math)
   const absent = report.find(row => row.classId === a && row.subjectId === id(70))
@@ -207,5 +207,8 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
   assert.equal(missing.pending, 1)
   assert.equal(report.some(row => row.classId === oldClass), false)
   assert.deepEqual(checked[28].pupils, [])
+  assert.deepEqual(checked[28].candidates.find((row: { classId: string }) => row.classId === a),
+    { classId: a, registered: 1, attended: 1, passed: 0, failed: 1, absentAll: 0, pending: 0 })
+  assert.equal(checked[28].candidates.find((row: { classId: string }) => row.classId === b).pending, 1)
   assert.deepEqual(checked[29].pupils, [{ id: pendingPupil, name: 'Murid Belum Diisi', number: 'FIXTURE-2' }])
 })

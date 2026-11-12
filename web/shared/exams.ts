@@ -1,6 +1,8 @@
 export const examStatuses = ['draft', 'submitted', 'verified', 'published'] as const
 export type ExamStatus = typeof examStatuses[number]
 
+export const minimumPassingMark = 20
+
 export interface Exam {
   id: string
   name: string
@@ -60,6 +62,6 @@ export function calculateGrade(mark: number | null, attendance: 'present' | 'abs
   if (mark >= 66) return 'B'
   if (mark >= 50) return 'C'
   if (mark >= 35) return 'D'
-  if (mark >= 20) return 'E'
+  if (mark >= minimumPassingMark) return 'E'
   return 'F'
 }

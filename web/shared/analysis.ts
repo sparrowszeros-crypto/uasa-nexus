@@ -13,6 +13,7 @@ export interface AnalysisExam {
 export interface AnalysisRow {
   classId: string
   className: string
+  level: string
   subjectId: string
   subjectName: string
   subjectCode: string

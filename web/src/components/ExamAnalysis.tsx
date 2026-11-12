@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { auth } from '../lib/firebase'
 import { analysisGrades, type AnalysisExam, type AnalysisRow, type PendingPupil } from '../../shared/analysis'
+import type { CandidateSummary } from '../../shared/uasa-reports'
+import { UasaReports } from './UasaReports'
 import './SchoolSetup.css'
 import './ExamAnalysis.css'
 
@@ -8,6 +10,7 @@ interface AnalysisResponse {
   exams?: AnalysisExam[]
   rows?: AnalysisRow[]
   pupils?: PendingPupil[]
+  candidates?: CandidateSummary[]
   message?: string
 }
 
@@ -152,6 +155,7 @@ export function ExamAnalysis() {
               </tr>)}</tbody>
             </table>
           </div>}
+          {!!rows.length && <UasaReports key={exam?.id} rows={rows} candidates={report.data.candidates ?? []} />}
           {detail && <section className="analysis-pending" aria-labelledby="analysis-pending-title">
             <h3 id="analysis-pending-title">Belum lengkap · {detail.className} · {detail.subjectName}</h3>
             <button type="button" className="secondary-button" onClick={() => setDetail(undefined)}>Tutup senarai</button>

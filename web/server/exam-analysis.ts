@@ -1,6 +1,6 @@
 import type { VerifiedIdentity } from './auth-core.ts'
 import { staffActor, type Sql } from './staff-data.ts'
-import { calculateGrade } from '../shared/exams.ts'
+import { calculateGrade, minimumPassingMark } from '../shared/exams.ts'
 import { analysisGrades, type AnalysisRow } from '../shared/analysis.ts'
 
 export function readAnalysisExams(sql: Sql, identity: VerifiedIdentity) {
@@ -34,7 +34,7 @@ export function readExamAnalysis(sql: Sql, identity: VerifiedIdentity, examId: s
       SELECT es.class_id, es.subject_id
       FROM exam e JOIN exam_subjects es ON es.exam_id = e.id AND es.academic_year_id = e.academic_year_id
     ), groups AS (
-      SELECT p.class_id, p.subject_id, c.name AS class_name, s.name AS subject_name, s.code AS subject_code,
+      SELECT p.class_id, p.subject_id, c.name AS class_name, c.level, s.name AS subject_name, s.code AS subject_code,
         e.academic_year_id, e.status, es.id AS exam_subject_id
       FROM pairs p CROSS JOIN exam e
       JOIN classes c ON c.id = p.class_id AND c.academic_year_id = e.academic_year_id
@@ -62,8 +62,25 @@ export function readExamAnalysis(sql: Sql, identity: VerifiedIdentity, examId: s
       ) roster ON true
       JOIN students p ON p.id = roster.student_id
       LEFT JOIN results r ON r.exam_subject_id = g.exam_subject_id AND r.student_id = p.id
+    ), candidate_results AS (
+      SELECT class_id, id,
+        bool_or(attendance = 'present') AS attended,
+        bool_or(attendance = 'pending') AS pending,
+        bool_and(attendance = 'absent') AS absent_all,
+        bool_or(attendance = 'absent' OR (attendance = 'present' AND mark < ${minimumPassingMark})) AS failed
+      FROM pupil_results
+      WHERE NOT ${Boolean(detail)}
+      GROUP BY class_id, id
+    ), candidate_totals AS (
+      SELECT class_id AS "classId", count(*)::int AS registered,
+        count(*) FILTER (WHERE attended)::int AS attended,
+        count(*) FILTER (WHERE NOT pending AND NOT failed)::int AS passed,
+        count(*) FILTER (WHERE NOT pending AND failed AND NOT absent_all)::int AS failed,
+        count(*) FILTER (WHERE absent_all)::int AS "absentAll",
+        count(*) FILTER (WHERE pending)::int AS pending
+      FROM candidate_results GROUP BY class_id
     ), totals AS (
-      SELECT g.class_id AS "classId", g.class_name AS "className",
+      SELECT g.class_id AS "classId", g.class_name AS "className", g.level,
         g.subject_id AS "subjectId", g.subject_name AS "subjectName", g.subject_code AS "subjectCode",
         count(p.id)::int AS expected,
         count(*) FILTER (WHERE p.attendance = 'present')::int AS present,
@@ -72,9 +89,10 @@ export function readExamAnalysis(sql: Sql, identity: VerifiedIdentity, examId: s
         COALESCE(array_agg(p.mark::float8) FILTER (WHERE p.attendance = 'present'), ARRAY[]::float8[]) AS marks
       FROM groups g
       LEFT JOIN pupil_results p USING (class_id, subject_id)
-      GROUP BY g.class_id, g.class_name, g.subject_id, g.subject_name, g.subject_code
+      GROUP BY g.class_id, g.class_name, g.level, g.subject_id, g.subject_name, g.subject_code
     )
     SELECT EXISTS (SELECT 1 FROM actor WHERE secretary) AS allowed,
+      COALESCE((SELECT jsonb_agg(to_jsonb(candidate_totals)) FROM candidate_totals), '[]') AS candidates,
       EXISTS (SELECT 1 FROM exam) AS "examExists",
       EXISTS (SELECT 1 FROM groups) AS "groupExists",
       CASE WHEN ${Boolean(detail)} THEN '[]'::jsonb ELSE COALESCE((

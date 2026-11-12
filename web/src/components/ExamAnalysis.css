@@ -15,3 +15,11 @@
 .analysis-table thead th { background: #eef5f2; }
 .analysis-detail { border: 0; background: transparent; color: #18564c; text-decoration: underline; font: inherit; cursor: pointer; }
 .analysis-pending { margin-top: 1.25rem; border-top: 1px solid #dae3e3; padding-top: .75rem; }
+
+.uasa-reports { margin-top: 1.5rem; border-top: 1px solid #dae3e3; padding-top: 1rem; }
+.uasa-grade-chart { margin: 1rem 0; max-width: 36rem; }
+.uasa-grade-chart figcaption { font-weight: 600; }
+.uasa-grade-chart ul { list-style: none; padding: 0; }
+.uasa-grade-chart li { display: grid; grid-template-columns: 2rem minmax(0, 1fr) 3rem; gap: .6rem; align-items: center; margin: .45rem 0; }
+.uasa-grade-track { background: #eef5f2; height: .85rem; border-radius: .25rem; }
+.uasa-grade-track > span { display: block; background: #26766a; height: 100%; border-radius: inherit; }

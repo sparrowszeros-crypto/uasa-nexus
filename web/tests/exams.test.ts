@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { summarizeUasa } from '../shared/uasa-reports.ts'
 import { calculateGrade } from '../shared/exams.ts'
 
 test('calculates correct grades based on school grade scale', () => {
@@ -39,4 +40,18 @@ test('calculates correct grades based on school grade scale', () => {
 
   // Belum dinilai / Pending
   assert.equal(calculateGrade(null, 'pending'), '—')
+})
+
+
+test('UASA GPMP matches both spreadsheet examples and excludes TH', () => {
+  const base = { classId: '', className: '', level: '3', subjectId: '', subjectName: '', subjectCode: '',
+    expected: 77, present: 74, pending: 0, markTotal: 0 }
+  const bm = summarizeUasa([{ ...base, absent: 3, grades: { A: 1, B: 7, C: 22, D: 13, E: 12, F: 19 } }])
+  assert.equal(bm.gradePoint?.toFixed(2), '4.15')
+  assert.deepEqual([bm.passed, bm.failed, bm.absent], [55, 19, 3])
+  const psv = summarizeUasa([{ ...base, expected: 267, present: 256, absent: 11,
+    grades: { A: 4, B: 63, C: 100, D: 70, E: 18, F: 1 } }])
+  assert.equal(psv.gradePoint?.toFixed(2), '3.15')
+  assert.deepEqual([psv.passed, psv.failed, psv.recorded], [255, 1, 267])
+  assert.equal(summarizeUasa([]).gradePoint, null)
 })

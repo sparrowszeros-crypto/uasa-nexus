@@ -29,7 +29,7 @@ export default staffDataHandler(async (sql, identity, request) => {
     if (!row.groupExists) throw new AuthError(404, 'Kelas dan subjek tidak tersedia untuk peperiksaan ini.')
     return { pupils: row.pupils as PendingPupil[] }
   }
-  return { rows: (row.rows as Parameters<typeof summarizeAnalysis>[0][]).map(summarizeAnalysis) }
+  return { rows: (row.rows as Parameters<typeof summarizeAnalysis>[0][]).map(summarizeAnalysis), candidates: row.candidates }
 })
 
 export const config = { path: '/api/admin/exam-analysis' }
