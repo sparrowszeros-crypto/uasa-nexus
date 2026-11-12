@@ -1,0 +1,9 @@
+{
+  "extends": "../netlify/functions/tsconfig.json",
+  "include": [
+    "./*.test.ts"
+  ],
+  "compilerOptions": {
+    "tsBuildInfoFile": "../.cache/tsconfig.tests.tsbuildinfo"
+  }
+}

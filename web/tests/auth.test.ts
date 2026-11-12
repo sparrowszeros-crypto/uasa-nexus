@@ -74,16 +74,14 @@ test('registered account without a staff role is denied', async () => {
 })
 
 test('multiple assigned roles survive and the verified email is normalized', async () => {
-  let captured: VerifiedIdentity | null = null
   const account = await authenticateStaff('Bearer verified', {
     verify: async () => ({ ...identity, email: ' GURU@Sekolah.EDU.MY ' }),
     findOrBind: async (id) => {
-      captured = id
+      assert.equal(id.email, 'guru@sekolah.edu.my')
       return { ...profile, roles: ['class_teacher', 'subject_teacher'] }
     },
   })
   assert.deepEqual(account.roles, ['class_teacher', 'subject_teacher'])
-  assert.equal(captured?.email, 'guru@sekolah.edu.my')
 })
 
 test('database failures do not become authentication success', async () => {
