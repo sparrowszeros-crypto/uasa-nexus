@@ -1,5 +1,6 @@
 import { AuthError } from '../../server/auth-core.ts'
 import { changeRecord, parseRecordChange } from '../../server/manage-records.ts'
+import { lockStaffRoleChanges } from '../../server/secretary-transfer.ts'
 import { staffDataHandler } from '../../server/staff-data.ts'
 
 export default staffDataHandler(async (sql, identity, request) => {
@@ -9,7 +10,11 @@ export default staffDataHandler(async (sql, identity, request) => {
   try { input = JSON.parse(body) } catch { throw new AuthError(400, 'Maklumat rekod tidak sah.') }
   const command = parseRecordChange(input)
   try {
-    const [result] = await changeRecord(sql, identity, command)
+    const change = changeRecord(sql, identity, command)
+    const rows = command.entity === 'teacher'
+      ? (await sql.transaction([lockStaffRoleChanges(sql), change], { isolationLevel: 'ReadCommitted' }))[1]
+      : await change
+    const [result] = rows
     if (!result.allowed) throw new AuthError(403, 'Hanya setiausaha peperiksaan boleh mengurus rekod ini.')
     if (!result.found) throw new AuthError(404, 'Rekod tidak tersedia untuk tindakan ini.')
     if (!result.changed) {

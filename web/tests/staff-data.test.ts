@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { neon } from '@neondatabase/serverless'
+import { listSuccessors, lockStaffRoleChanges, transferSecretary } from '../server/secretary-transfer.ts'
+import transferHandler from '../netlify/functions/secretary-transfer.ts'
 import { changeRecord, parseRecordChange } from '../server/manage-records.ts'
 import manageHandler from '../netlify/functions/manage-records.ts'
 import { staffResults, staffScope } from '../server/staff-data.ts'
@@ -47,6 +49,9 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
     'subjects', 'class_teachers', 'teaching_assignments', 'students', 'exams', 'exam_subjects', 'results', 'enrolments', 'audit_events', 'parent_students',
   ]
   assert.equal((await manageHandler(new Request('http://localhost/api/admin/manage-records', { method: 'POST' }))).status, 401)
+  for (const method of ['GET', 'POST']) {
+    assert.equal((await transferHandler(new Request('http://localhost/api/admin/secretary-transfer', { method }))).status, 401)
+  }
   const fixtures = [
     ...tables.map(table => sql.query(
       'CREATE TEMP TABLE ' + table + ' (LIKE public.' + table + ' INCLUDING ALL) ON COMMIT DROP',
@@ -271,4 +276,42 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
   assert.deepEqual(managed[33][0].slips.map((slip: { pupil: { id: string } }) => slip.pupil.id), [pupil, id(84)])
   assert.equal(managed[33][0].slips[1].subjects[0].attendance, 'absent')
   assert.equal(managed[34][0].count, 2)
+
+  const succession = [
+    listSuccessors(sql, actor(1)),
+    listSuccessors(sql, actor(2)),
+    transferSecretary(sql, actor(2), id(3), actor(3).email),
+    transferSecretary(sql, actor(1), id(1), actor(1).email),
+    transferSecretary(sql, actor(1), id(5), actor(5).email),
+    transferSecretary(sql, actor(1), id(4), actor(4).email),
+    transferSecretary(sql, actor(1), id(2), 'stale@example.invalid'),
+    sql`DELETE FROM account_identities WHERE account_id = ${id(3)}`,
+    transferSecretary(sql, actor(1), id(3), actor(3).email),
+    sql`INSERT INTO account_roles (account_id, role) VALUES (${id(1)}, 'class_teacher')`,
+    lockStaffRoleChanges(sql),
+    transferSecretary(sql, actor(1), id(2), actor(2).email),
+    transferSecretary(sql, actor(1), id(2), actor(2).email),
+    staffScope(sql, actor(1)),
+    staffScope(sql, actor(2)),
+    sql`SELECT account_id, role FROM account_roles WHERE account_id IN (${id(1)}, ${id(2)}) ORDER BY account_id, role`,
+    sql`SELECT actor_id, entity_id, before_value, after_value FROM audit_events WHERE event_type = 'secretary.transferred'`,
+  ]
+  const handover = (await sql.transaction([...fixtures, ...succession], { isolationLevel: 'ReadCommitted' })).slice(fixtures.length)
+  assert.deepEqual(handover[0][0].teachers.map((teacher: { id: string }) => teacher.id), [id(2), id(3)])
+  assert.deepEqual(handover[1], [])
+  assert.deepEqual(handover[2][0], { allowed: false, transferred: false })
+  for (const index of [3, 4, 5, 6, 8]) assert.deepEqual(handover[index][0], { allowed: true, transferred: false })
+  assert.deepEqual(handover[11][0], { allowed: true, transferred: true })
+  assert.deepEqual(handover[12][0], { allowed: false, transferred: false })
+  assert.equal(handover[13][0].schoolWide, false)
+  assert.equal(handover[14][0].schoolWide, true)
+  assert.deepEqual(handover[15], [
+    { account_id: id(1), role: 'class_teacher' },
+    { account_id: id(2), role: 'class_teacher' },
+    { account_id: id(2), role: 'exam_secretary' },
+  ])
+  assert.deepEqual(handover[16], [{
+    actor_id: id(1), entity_id: id(2),
+    before_value: { secretaryId: id(1) }, after_value: { secretaryId: id(2) },
+  }])
 })

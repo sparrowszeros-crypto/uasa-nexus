@@ -2,6 +2,7 @@ import { useState } from 'react'
 import './App.css'
 import { AuthGate } from './components/AuthGate'
 import { ClassRoster } from './components/ClassRoster'
+import { SecretaryTransfer } from './components/SecretaryTransfer'
 import { SchoolSetupPanel } from './components/SchoolSetup'
 import { StaffScope } from './components/StaffScope'
 import { ExamsManagement } from './components/ExamsManagement'
@@ -20,6 +21,7 @@ const roles = {
       'Peperiksaan',
       'Kelas & Murid',
       'Guru & Penugasan',
+      'Pindah Jawatan',
       'Akaun Ibu Bapa',
       'Markah',
       'Analisis',
@@ -50,6 +52,7 @@ const moduleDescriptions: Record<string, string> = {
     'Senarai peperiksaan, tarikh kemasukan markah dan status penerbitan.',
   'Kelas & Murid':
     'Senarai kelas, pendaftaran murid dan sejarah perubahan status.',
+  'Pindah Jawatan': 'Serahkan peranan setiausaha kepada guru lain.',
   'Guru & Penugasan':
     'Pendaftaran guru serta penugasan kelas dan subjek.',
   'Akaun Ibu Bapa':
@@ -217,6 +220,8 @@ function Workspace({ account, logout }: { account: AccountProfile; logout: () =>
           </div>
         ) : role === 'secretary' && page === 'Guru & Penugasan' ? (
           <SchoolSetupPanel email={account.email} page="teachers" />
+        ) : role === 'secretary' && page === 'Pindah Jawatan' ? (
+          <SecretaryTransfer />
         ) : role === 'secretary' && page === 'Peperiksaan' ? (
           <ExamsManagement email={account.email} />
         ) : (role === 'secretary' || role === 'subjectTeacher') && page === 'Markah' ? (
