@@ -14,3 +14,7 @@
 .setup-error { color: #89272a; background: #fff1f0; }
 
 .roster-edit { flex: 1 1 100%; min-width: 0; }
+
+.record-actions { flex: 0 1 auto; min-width: 0; }
+.setup-list li .record-buttons { display: flex; flex-wrap: wrap; gap: .4rem; }
+.record-actions fieldset { align-items: end; }

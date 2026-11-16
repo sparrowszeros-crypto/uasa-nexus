@@ -8,6 +8,7 @@ interface SlipResponse {
   options?: SlipClass[]
   pupils?: SlipPupil[]
   slip?: ExamSlip
+  slips?: ExamSlip[]
   message?: string
 }
 
@@ -40,15 +41,18 @@ function useSlipData(path: string | null) {
 
 const optionKey = (option: SlipClass) => option.examId + ':' + option.classId
 
-export function ExamSlips() {
+export function ExamSlips({ allowBulk = false }: { allowBulk?: boolean }) {
+  const [mode, setMode] = useState<'individual' | 'bulk'>('individual')
   const [selection, setSelection] = useState('')
   const [pupilId, setPupilId] = useState('')
   const options = useSlipData('')
   const chosen = options?.data?.options?.find(o => optionKey(o) === selection)
   const query = chosen ? '?' + new URLSearchParams({ examId: chosen.examId, classId: chosen.classId }) : null
-  const pupils = useSlipData(query)
-  const record = useSlipData(query && pupilId ? query + '&studentId=' + encodeURIComponent(pupilId) : null)
-  const slip = record?.data?.slip
+  const bulk = allowBulk && mode === 'bulk'
+  const pupils = useSlipData(bulk ? null : query)
+  const record = useSlipData(query && bulk ? query + '&mode=bulk' : query && pupilId ? query + '&studentId=' + encodeURIComponent(pupilId) : null)
+  const individual = record?.data?.slip
+  const slips = bulk ? record?.data?.slips ?? [] : individual ? [individual] : []
   const error = options?.error || pupils?.error || record?.error
 
   return (
@@ -59,6 +63,13 @@ export function ExamSlips() {
       {options?.data?.options?.length === 0 && <p>Tiada keputusan diterbitkan untuk kelas yang boleh anda akses.</p>}
       {!!options?.data?.options?.length && (
         <div className="setup-fields">
+          {allowBulk && <label>Kaedah cetak<select value={mode} onChange={event => {
+            setMode(event.target.value === 'bulk' ? 'bulk' : 'individual')
+            setPupilId('')
+          }}>
+            <option value="individual">Individu</option>
+            <option value="bulk">Pukal satu kelas</option>
+          </select></label>}
           <label>Peperiksaan dan kelas
             <select value={selection} onChange={event => {
               setSelection(event.target.value)
@@ -70,18 +81,19 @@ export function ExamSlips() {
               </option>)}
             </select>
           </label>
-          {chosen && <label>Murid
+          {chosen && !bulk && <label>Murid
             <select value={pupilId} onChange={event => setPupilId(event.target.value)} disabled={!pupils?.data?.pupils?.length}>
               <option value="">{pupils ? 'Pilih murid' : 'Memuatkan murid…'}</option>
               {pupils?.data?.pupils?.map(p => <option key={p.id} value={p.id}>{p.name} ({p.number})</option>)}
             </select>
           </label>}
-          {slip && <button type="button" className="secondary-button" onClick={() => window.print()}>Cetak slip</button>}
+          {slips.length > 0 && <button type="button" className="secondary-button" onClick={() => window.print()}>{bulk ? `Cetak ${slips.length} slip` : 'Cetak slip'}</button>}
         </div>
       )}
       {pupils?.data?.pupils?.length === 0 && <p>Tiada murid dengan markah atau rekod TH dalam kelas ini.</p>}
-      {pupilId && !record && <p role="status">Memuatkan slip…</p>}
-      {chosen && slip && <article id="uasa-slip" className="exam-slip">
+      {(pupilId || (chosen && bulk)) && !record && <p role="status">Memuatkan slip…</p>}
+      {bulk && record?.data?.slips?.length === 0 && <p>Tiada slip untuk kelas ini.</p>}
+      {chosen && slips.length > 0 && <div id="uasa-slip">{slips.map(slip => <article key={slip.pupil.id} className="exam-slip">
         <h2>Slip Keputusan Peperiksaan</h2>
         <p>{chosen.examName} · Sesi {chosen.year}</p>
         <dl>
@@ -98,7 +110,7 @@ export function ExamSlips() {
           </tr>)}</tbody>
         </table>
         <p>TH = Tidak hadir. — = Markah belum direkodkan.</p>
-      </article>}
+      </article>)}</div>}
     </section>
   )
 }

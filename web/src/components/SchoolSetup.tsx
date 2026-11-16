@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { getStoredSessionToken } from '../lib/account-context'
 import { levels, teacherRoles, type SchoolSetup, type SetupCommand } from '../../shared/setup'
+import { RecordActions } from './RecordActions'
 import './SchoolSetup.css'
 
 const roleNames = { class_teacher: 'Guru Kelas', subject_teacher: 'Guru Subjek' }
@@ -104,7 +105,9 @@ export function SchoolSetupPanel({ email, page, onClassCreated }: { email: strin
             </form>
             <h3>Kelas berdaftar ({setup.classes.length})</h3>
             {setup.classes.length ? <ul className="setup-list">{setup.classes.map(c =>
-              <li key={c.id}><strong>{c.name}</strong><span>{levelName(c.level)} · {c.year}</span></li>,
+              <li key={c.id}><strong>{c.name}</strong><span>{levelName(c.level)} · {c.year}</span>
+                <RecordActions item={{ ...c, entity: 'class' }} disabled={disabled} onChanged={() => { reload(); onClassCreated?.() }} />
+              </li>,
             )}</ul> : <p>Belum ada kelas didaftarkan.</p>}
           </section>
           <section className="content-card">
@@ -118,7 +121,9 @@ export function SchoolSetupPanel({ email, page, onClassCreated }: { email: strin
             </form>
             <h3>Subjek berdaftar ({setup.subjects.length})</h3>
             {setup.subjects.length ? <ul className="setup-list">{setup.subjects.map(s =>
-              <li key={s.id}><strong>{s.name}</strong><span>{s.code}{s.active ? '' : ' · Tidak aktif'}</span></li>,
+              <li key={s.id}><strong>{s.name}</strong><span>{s.code}{s.active ? '' : ' · Tidak aktif'}</span>
+                <RecordActions item={{ ...s, entity: 'subject' }} disabled={disabled} onChanged={reload} />
+              </li>,
             )}</ul> : <p>Belum ada subjek didaftarkan.</p>}
           </section>
         </>
@@ -145,6 +150,7 @@ export function SchoolSetupPanel({ email, page, onClassCreated }: { email: strin
               <li key={t.id}>
                 <strong>{t.name}</strong>
                 <span>{t.email} · {t.roles.map(r => roleNames[r]).join(', ')}</span>
+                <RecordActions item={{ ...t, entity: 'teacher' }} disabled={disabled} onChanged={reload} />
               </li>,
             )}</ul> : <p>Belum ada guru didaftarkan.</p>}
           </section>

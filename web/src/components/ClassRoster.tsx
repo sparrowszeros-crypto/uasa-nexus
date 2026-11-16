@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { getStoredSessionToken } from '../lib/account-context'
 import type { ExitStatus, Pupil, RosterClass, RosterCommand } from '../../shared/roster'
+import { RecordActions } from './RecordActions'
 import './SchoolSetup.css'
 
 const statusNames = { active: 'Aktif', transferred: 'Pindah sekolah', removed: 'Dibuang sekolah' }
@@ -22,7 +23,7 @@ async function rosterRequest(_email: string, classId?: string, signal?: AbortSig
   return data
 }
 
-export function ClassRoster({ email }: { email: string }) {
+export function ClassRoster({ email, canManage = false }: { email: string; canManage?: boolean }) {
   const [classes, setClasses] = useState<RosterClass[]>()
   const [chosen, setChosen] = useState('')
   const [retry, setRetry] = useState(0)
@@ -52,13 +53,13 @@ export function ClassRoster({ email }: { email: string }) {
               {classes.map(c => <option key={c.id} value={c.id}>{c.name} · {c.year}</option>)}
             </select></label>
           </div>
-          <RosterRows key={selected.id} cls={selected} email={email} />
+          <RosterRows key={selected.id} cls={selected} email={email} canManage={canManage} />
         </>}
     </section>
   )
 }
 
-function RosterRows({ cls, email }: { cls: RosterClass; email: string }) {
+function RosterRows({ cls, email, canManage }: { cls: RosterClass; email: string; canManage: boolean }) {
   const [pupils, setPupils] = useState<Pupil[]>()
   const [retry, setRetry] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -137,8 +138,9 @@ function RosterRows({ cls, email }: { cls: RosterClass; email: string }) {
                   <span>{p.number} · {p.endsOn && p.status === 'active' ? 'Pendaftaran tamat' : statusNames[p.status]}</span>
                   <span>Mula: {p.startsOn}{p.endsOn ? ' · Tamat: ' + p.endsOn : ''}</span>
                 </div>
+                {canManage && <RecordActions item={{ ...p, entity: 'student' }} disabled={busy} onChanged={reload} />}
                 {!p.endsOn && p.status === 'active' && editing?.id !== p.id && <div>
-                  <button type="button" className="secondary-button" disabled={busy} onClick={() => { setNotice(undefined); setEditing({ id: p.id, action: 'rename' }) }}>Betulkan nama</button>
+                  {!canManage && <button type="button" className="secondary-button" disabled={busy} onClick={() => { setNotice(undefined); setEditing({ id: p.id, action: 'rename' }) }}>Betulkan nama</button>}
                   <button type="button" className="secondary-button" disabled={busy || p.startsOn > currentDate} onClick={() => { setNotice(undefined); setEditing({ id: p.id, action: 'exit' }) }}>Kemas kini status</button>
                 </div>}
                 {!p.endsOn && editing?.id === p.id && <form className="roster-edit" onSubmit={event => {

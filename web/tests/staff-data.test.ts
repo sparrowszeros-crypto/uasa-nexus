@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { neon } from '@neondatabase/serverless'
+import { changeRecord, parseRecordChange } from '../server/manage-records.ts'
+import manageHandler from '../netlify/functions/manage-records.ts'
 import { staffResults, staffScope } from '../server/staff-data.ts'
 import { readMarkRows, writeMarkRows } from '../server/exams.ts'
 import { readSlipRows } from '../server/slips.ts'
@@ -42,12 +44,14 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
     staffResults(sql, actor(n), { examId, classId, subjectId })
   const tables = [
     'accounts', 'account_roles', 'account_identities', 'academic_years', 'classes',
-    'subjects', 'class_teachers', 'teaching_assignments', 'students', 'exams', 'exam_subjects', 'results', 'enrolments', 'audit_events',
+    'subjects', 'class_teachers', 'teaching_assignments', 'students', 'exams', 'exam_subjects', 'results', 'enrolments', 'audit_events', 'parent_students',
   ]
+  assert.equal((await manageHandler(new Request('http://localhost/api/admin/manage-records', { method: 'POST' }))).status, 401)
   const fixtures = [
     ...tables.map(table => sql.query(
       'CREATE TEMP TABLE ' + table + ' (LIKE public.' + table + ' INCLUDING ALL) ON COMMIT DROP',
     )),
+    sql`ALTER TABLE enrolments ADD FOREIGN KEY (student_id) REFERENCES pg_temp.students(id)`,
     ...[1, 2, 3, 4, 5].map(n => sql`
       INSERT INTO accounts (id, email, display_name, active)
       VALUES (${id(n)}, ${actor(n).email}, 'Fixture', ${n !== 5})
@@ -211,4 +215,60 @@ test('PostgreSQL: current roles and assignments constrain actual staff queries',
     { classId: a, registered: 1, attended: 1, passed: 0, failed: 1, absentAll: 0, pending: 0 })
   assert.equal(checked[28].candidates.find((row: { classId: string }) => row.classId === b).pending, 1)
   assert.deepEqual(checked[29].pupils, [{ id: pendingPupil, name: 'Murid Belum Diisi', number: 'FIXTURE-2' }])
+  const editSubject = { action: 'edit', entity: 'subject', id: language, name: 'Bahasa', code: 'BML' }
+  const mutate = (n: number, input: unknown) => changeRecord(sql, actor(n), parseRecordChange(input))
+  const remove = (entity: string, id: string) => ({ action: 'delete', entity, id })
+  const manage = [
+    mutate(3, editSubject),
+    mutate(1, { action: 'edit', entity: 'exam', id: draft, name: 'Ujian 1', deadline: '2027-03-15T10:00' }),
+    mutate(1, { action: 'edit', entity: 'class', id: b, name: '1 Budi', level: '1' }),
+    mutate(1, editSubject),
+    mutate(1, { action: 'edit', entity: 'student', id: pupil, name: 'Pupil Edited', number: 'FIXTURE-3' }),
+    mutate(1, { action: 'edit', entity: 'teacher', id: id(3), name: 'Guru Baru', email: actor(3).email, roles: ['subject_teacher', 'class_teacher'] }),
+    mutate(1, remove('exam', published)),
+    mutate(1, remove('class', a)),
+    mutate(1, remove('subject', language)),
+    mutate(1, remove('student', pupil)),
+    mutate(1, remove('teacher', id(1))),
+    readSlipRows(sql, actor(1), published, a, null, true),
+    readSlipRows(sql, actor(2), published, a, null, true),
+    readSlipRows(sql, actor(1), draft, a, null, true),
+    sql`INSERT INTO results (exam_subject_id, student_id, mark, attendance, updated_by)
+      VALUES (${id(35)}, ${pendingPupil}, 91, 'present', ${id(1)})`,
+    readSlipRows(sql, actor(1), published, b, null, true),
+    mutate(1, remove('teacher', id(3))),
+    staffScope(sql, actor(3)),
+    sql`SELECT count(*)::int AS remaining FROM teaching_assignments WHERE account_id = ${id(3)}`,
+    mutate(1, remove('class', oldClass)),
+    sql`INSERT INTO classes (id, academic_year_id, name, level) VALUES (${id(88)}, ${yr}, '1 Kosong', '1')`,
+    mutate(1, remove('class', id(88))),
+    sql`INSERT INTO subjects (id, code, name) VALUES (${id(87)}, 'UJ', 'Kosong')`,
+    mutate(1, remove('subject', id(87))),
+    sql`INSERT INTO exams (id, academic_year_id, name) VALUES (${id(86)}, ${yr}, 'Ujian kosong')`,
+    mutate(1, remove('exam', id(86))),
+    sql`INSERT INTO students (id, student_number, full_name) VALUES (${id(85)}, 'FIXTURE-85', 'Murid ujian')`,
+    sql`INSERT INTO enrolments (student_id, academic_year_id, class_id, starts_on) VALUES (${id(85)}, ${yr}, ${a}, '2027-01-01')`,
+    mutate(1, remove('student', id(85))),
+    sql`SELECT count(*)::int AS remaining FROM enrolments WHERE student_id = ${id(85)}`,
+    sql`INSERT INTO students (id, student_number, full_name) VALUES (${id(84)}, 'FIXTURE-84', 'Second Pupil')`,
+    sql`INSERT INTO enrolments (student_id, academic_year_id, class_id, starts_on) VALUES (${id(84)}, ${yr}, ${a}, '2027-01-01')`,
+    sql`INSERT INTO results (exam_subject_id, student_id, attendance, updated_by) VALUES (${id(32)}, ${id(84)}, 'absent', ${id(1)})`,
+    readSlipRows(sql, actor(1), published, a, null, true),
+    sql`SELECT count(*)::int AS count FROM audit_events WHERE event_type IN ('teacher.deactivated', 'student.deleted')`,
+  ]
+  const managed = (await sql.transaction([...fixtures, ...more, ...manage])).slice(fixtures.length + more.length)
+  assert.equal(managed[0][0].allowed, false)
+  for (const index of [1, 2, 3, 4, 5, 16, 21, 23, 25, 28]) assert.equal(managed[index][0].changed, true, 'change ' + index)
+  for (const index of [6, 7, 8, 9, 10, 19]) assert.equal(managed[index][0].changed, false, 'blocked ' + index)
+  assert.equal(managed[11][0].slips[0].pupil.name, 'Pupil Edited')
+  assert.equal(managed[11][0].slips[0].subjects[0].mark, 85)
+  assert.deepEqual(managed[12][0].slips, [])
+  assert.deepEqual(managed[13][0].slips, [])
+  assert.equal(managed[15][0].slips[0].pupil.id, pendingPupil)
+  assert.deepEqual(managed[17], [])
+  assert.equal(managed[18][0].remaining, 0)
+  assert.equal(managed[29][0].remaining, 0)
+  assert.deepEqual(managed[33][0].slips.map((slip: { pupil: { id: string } }) => slip.pupil.id), [pupil, id(84)])
+  assert.equal(managed[33][0].slips[1].subjects[0].attendance, 'absent')
+  assert.equal(managed[34][0].count, 2)
 })

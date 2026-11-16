@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { getStoredSessionToken } from '../lib/account-context'
 import type { Exam, ExamStatus } from '../../shared/exams'
+import { RecordActions } from './RecordActions'
 import './SchoolSetup.css'
 
 const statusLabels: Record<ExamStatus, { text: string; color: string }> = {
@@ -243,6 +244,7 @@ export function ExamsManagement({ email }: { email?: string }) {
                   </div>
 
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <RecordActions item={{ ...exam, entity: 'exam' }} disabled={busy} onChanged={loadExams} />
                     {exam.status === 'draft' && (
                       <button
                         type="button"

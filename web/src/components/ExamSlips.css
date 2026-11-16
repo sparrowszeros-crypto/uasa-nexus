@@ -17,17 +17,23 @@
 @media print {
   @page { size: A4; margin: 15mm; }
   body:has(#uasa-slip) { background: white; }
-  body:has(#uasa-slip) #root * { visibility: hidden; }
-  body:has(#uasa-slip) #uasa-slip, body:has(#uasa-slip) #uasa-slip * { visibility: visible; }
-  body:has(#uasa-slip) #uasa-slip {
-    position: absolute;
-    inset: 0 0 auto;
-    box-sizing: border-box;
-    max-width: none;
-    margin: 0;
-    padding: 0;
-    border: 0;
+  body:has(#uasa-slip) > :not(:has(#uasa-slip)),
+  #root :has(#uasa-slip) > :not(:has(#uasa-slip)):not(#uasa-slip) { display: none !important; }
+  body:has(#uasa-slip) #root, #root :has(#uasa-slip), #uasa-slip {
+    display: block !important;
+    position: static !important;
+    width: auto !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
     color: black;
   }
+  #uasa-slip .exam-slip { max-width: none; margin: 0; padding: 0; border: 0; }
+  #uasa-slip .exam-slip + .exam-slip { break-before: page; }
   .exam-slip tr { break-inside: avoid; }
 }

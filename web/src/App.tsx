@@ -212,7 +212,7 @@ function Workspace({ account, logout }: { account: AccountProfile; logout: () =>
           </>
         ) : page === 'Kelas & Murid' && (role === 'secretary' || role === 'classTeacher') ? (
           <div className="setup-panel">
-            <ClassRoster key={rosterVersion} email={account.email} />
+            <ClassRoster key={rosterVersion} email={account.email} canManage={role === 'secretary'} />
             {role === 'secretary' && <SchoolSetupPanel email={account.email} page="classes" onClassCreated={() => setRosterVersion(v => v + 1)} />}
           </div>
         ) : role === 'secretary' && page === 'Guru & Penugasan' ? (
@@ -224,7 +224,7 @@ function Workspace({ account, logout }: { account: AccountProfile; logout: () =>
         ) : role === 'secretary' && page === 'Analisis' ? (
           <ExamAnalysis />
         ) : (role === 'secretary' || role === 'classTeacher') && page === 'Slip Peperiksaan' ? (
-          <ExamSlips />
+          <ExamSlips allowBulk={role === 'secretary'} />
         ) : (
           <section className="content-card empty-state">
             <span className="empty-icon" aria-hidden="true">▤</span>
