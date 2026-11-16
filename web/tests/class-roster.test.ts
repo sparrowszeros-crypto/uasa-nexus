@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { neon } from '@neondatabase/serverless'
 import { AuthError } from '../server/auth-core.ts'
-import { changeRoster, parseRosterCommand, readRoster } from '../server/roster.ts'
+import { parseRosterCsv } from '../shared/roster-csv.ts'
+import { changeRoster, importRoster, parseRosterCommand, readRoster } from '../server/roster.ts'
 import handler from '../netlify/functions/class-roster.ts'
 import type { RosterCommand } from '../shared/roster.ts'
 
@@ -25,6 +26,17 @@ test('roster refuses unauthenticated reads and writes', async () => {
   }
 })
 
+test('CSV keeps leading zeros and rejects malformed rows and duplicate school numbers', () => {
+  const header = 'nombor_daftar,nama_penuh'
+  assert.deepEqual(parseRosterCsv('\uFEFF' + header + '\r\n00042,"Murid, ""A"""\r\n'), [
+    { number: '00042', name: 'Murid, "A"', line: 2 },
+  ])
+  assert.throws(() => parseRosterCsv(header + '\na1,Ali\nA1,Ani'), /Baris 3/)
+  assert.throws(() => parseRosterCsv(header + '\n123,"Nama tidak ditutup'), /Baris 2/)
+  assert.throws(() => parseRosterCsv('nombor_daftar;nama_penuh\n123;Ali'), /Baris 1/)
+  assert.throws(() => parseRosterCsv(header + '\n'), /tiada rekod/)
+})
+
 const connection = process.env.DATABASE_URL
 test('Neon: register, isolate, rename and close a pupil enrolment with history and audit', {
   skip: !connection && 'Jalankan dengan --env-file=.env untuk ujian PostgreSQL',
@@ -38,7 +50,7 @@ test('Neon: register, isolate, rename and close a pupil enrolment with history a
   const other = id(12), year = id(20), pupil = id(30)
   const fixtures = [
     ...['accounts', 'account_roles', 'account_identities', 'academic_years', 'classes',
-      'class_teachers', 'students', 'enrolments', 'audit_events'].map(table => sql.query(
+      'class_teachers', 'students', 'enrolments', 'audit_events', 'parent_students', 'results'].map(table => sql.query(
       'CREATE TEMP TABLE ' + table + ' (LIKE public.' + table + ' INCLUDING ALL) ON COMMIT DROP',
     )),
     sql`ALTER TABLE enrolments ADD FOREIGN KEY (student_id) REFERENCES pg_temp.students(id),
@@ -105,4 +117,50 @@ test('Neon: register, isolate, rename and close a pupil enrolment with history a
   assert.ok(r.audits.every(row => row.actor_id === id(2)))
   assert.equal(r.audits[1].before_value.name, 'Nama Lama')
   assert.equal(r.audits[2].after_value.status, 'transferred')
+
+  const batch = parseRosterCsv('nombor_daftar,nama_penuh\n00024,Murid Pertama\n00025,"Murid, Kedua"')
+  const update = { action: 'edit', classId: reg.classId, studentId: pupil, number: 'NEW-02', name: 'Nama Dikemas Kini' } as const
+  const remove = { action: 'delete', classId: reg.classId, studentId: pupil } as const
+  const checks = {
+    wrongClassImport: importRoster(sql, teacher, other, reg.date, batch),
+    wrongRoleImport: importRoster(sql, subject, reg.classId, reg.date, batch),
+    wrongYearImport: importRoster(sql, teacher, reg.classId, '2027-01-01', batch),
+    conflict: importRoster(sql, teacher, reg.classId, reg.date, [batch[0], { ...batch[1], number: 'DAFTAR-02' }]),
+    afterConflict: sql`SELECT count(*)::int AS count FROM students`,
+    imported: importRoster(sql, teacher, reg.classId, reg.date, batch),
+    afterImport: readRoster(sql, teacher, reg.classId),
+    forbiddenEdit: write(subject, update),
+    wrongClassEdit: write(teacher, { ...update, classId: other }),
+    duplicateEdit: write(teacher, { ...update, number: '00024' }),
+    edited: write(teacher, update),
+    wrongClassDelete: write(teacher, { ...remove, classId: other }),
+    mark: sql`INSERT INTO results (exam_subject_id, student_id, attendance, updated_by) VALUES (${id(85)}, ${pupil}, 'pending', ${id(1)})`,
+    protectedDelete: write(teacher, remove),
+    afterEdit: readRoster(sql, teacher, reg.classId),
+    removeFixtureMark: sql`DELETE FROM results WHERE student_id = ${pupil}`,
+    deleted: write(teacher, remove),
+    afterDelete: readRoster(sql, teacher, reg.classId),
+    audited: sql`SELECT event_type FROM audit_events ORDER BY id`,
+  }
+  const mutations = (await sql.transaction([...fixtures, ...Object.values(checks)])).slice(fixtures.length)
+  const byName = Object.fromEntries(Object.keys(checks).map((key, i) => [key, mutations[i]]))
+  for (const key of ['wrongClassImport', 'wrongRoleImport', 'wrongClassEdit', 'forbiddenEdit', 'wrongClassDelete']) {
+    assert.equal(byName[key][0].allowed, false)
+  }
+  assert.equal(byName.wrongYearImport[0].valid_date, false)
+  assert.deepEqual(byName.conflict[0].duplicates, [{ line: 3, number: 'DAFTAR-02' }])
+  assert.equal(byName.afterConflict[0].count, 1)
+  assert.equal(byName.imported[0].imported, 2)
+  assert.ok(byName.afterImport[0].pupils.some((row: { number: string; name: string }) =>
+    row.number === '00025' && row.name === 'Murid, Kedua'))
+  assert.equal(byName.duplicateEdit[0].changed, false)
+  assert.equal(byName.edited[0].changed, true)
+  assert.equal(byName.protectedDelete[0].changed, false)
+  assert.ok(byName.afterEdit[0].pupils.some((row: { number: string; name: string }) =>
+    row.number === 'NEW-02' && row.name === 'Nama Dikemas Kini'))
+  assert.equal(byName.deleted[0].changed, true)
+  assert.equal(byName.afterDelete[0].pupils.length, 2)
+  assert.deepEqual(byName.audited.map(row => row.event_type), [
+    'student.registered', 'student.registered', 'student.updated', 'student.deleted',
+  ])
 })

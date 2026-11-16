@@ -20,10 +20,11 @@ function malaysiaDeadline(value: string | null) {
   }).format(new Date(value)).replace(' ', 'T')
 }
 
-export function RecordActions({ item, onChanged, disabled = false }: {
+export function RecordActions({ item, onChanged, disabled = false, rosterClassId }: {
   item: RecordItem
   onChanged: () => void | Promise<void>
   disabled?: boolean
+  rosterClassId?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -39,10 +40,11 @@ export function RecordActions({ item, onChanged, disabled = false }: {
       const token = await auth.currentUser?.getIdToken()
       if (!token) throw new Error('Sila log masuk semula.')
       const fields = data ? Object.fromEntries(data) : {}
-      const response = await fetch('/api/admin/manage-records', {
+      const path = rosterClassId ? '/api/staff/class-roster' : '/api/admin/manage-records'
+      const response = await fetch(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-        body: JSON.stringify({ ...fields, action, entity: item.entity, id: item.id, roles: data?.getAll('role') }),
+        body: JSON.stringify({ ...fields, action, entity: item.entity, id: item.id, classId: rosterClassId, studentId: rosterClassId ? item.id : undefined, roles: data?.getAll('role') }),
       })
       const result = await response.json().catch(() => null) as { ok?: boolean; message?: string } | null
       if (!response.ok || !result?.ok) throw new Error(result?.message || 'Perubahan tidak dapat disimpan.')

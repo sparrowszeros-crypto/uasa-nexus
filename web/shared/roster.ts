@@ -1,6 +1,8 @@
 export type ExitStatus = 'transferred' | 'removed'
 export type RosterCommand =
   | { action: 'register'; classId: string; number: string; name: string; date: string }
+  | { action: 'edit'; classId: string; studentId: string; name: string; number: string }
+  | { action: 'delete'; classId: string; studentId: string }
   | { action: 'rename'; classId: string; studentId: string; name: string }
   | { action: 'exit'; classId: string; studentId: string; status: ExitStatus; date: string }
 

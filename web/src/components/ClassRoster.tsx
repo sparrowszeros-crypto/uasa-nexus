@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { getStoredSessionToken } from '../lib/account-context'
 import type { ExitStatus, Pupil, RosterClass, RosterCommand } from '../../shared/roster'
+import { RosterCsvImport } from './RosterCsvImport'
 import { RecordActions } from './RecordActions'
 import './SchoolSetup.css'
 
@@ -8,7 +9,7 @@ const statusNames = { active: 'Aktif', transferred: 'Pindah sekolah', removed: '
 const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Kuala_Lumpur' }).format(new Date())
 const value = (form: FormData, key: string) => String(form.get(key) ?? '')
 
-async function rosterRequest(_email: string, classId?: string, signal?: AbortSignal, command?: RosterCommand) {
+async function rosterRequest(_email: string, classId?: string, signal?: AbortSignal, command?: RosterCommand | { action: 'import'; classId: string; csv: string; date: string }) {
   const token = getStoredSessionToken()
   if (!token) throw new Error('Sila log masuk semula.')
   const headers = new Headers({ Authorization: 'Bearer ' + token })
@@ -17,7 +18,7 @@ async function rosterRequest(_email: string, classId?: string, signal?: AbortSig
     signal, headers, method: command ? 'POST' : 'GET', body: command ? JSON.stringify(command) : undefined,
   })
   const data = await response.json().catch(() => null) as {
-    ok: boolean; message?: string; classes?: RosterClass[]; pupils?: Pupil[]
+    ok: boolean; message?: string; imported?: number; classes?: RosterClass[]; pupils?: Pupil[]
   } | null
   if (!response.ok || !data?.ok) throw new Error(data?.message || 'Permintaan belum berjaya. Sila cuba lagi.')
   return data
@@ -65,7 +66,7 @@ function RosterRows({ cls, email, canManage }: { cls: RosterClass; email: string
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [notice, setNotice] = useState<{ ok: boolean; message: string }>()
-  const [editing, setEditing] = useState<{ id: string; action: 'rename' | 'exit' }>()
+  const [editing, setEditing] = useState<{ id: string; action: 'exit' }>()
   const classId = cls.id
 
   useEffect(() => {
@@ -101,6 +102,23 @@ function RosterRows({ cls, email, canManage }: { cls: RosterClass; email: string
     }
   }
 
+  async function importCsv(csv: string, date: string) {
+    if (busy || !pupils) return false
+    setBusy(true)
+    setNotice(undefined)
+    try {
+      const response = await rosterRequest(email, undefined, undefined, { action: 'import', classId, csv, date })
+      setNotice({ ok: true, message: response.imported + ' murid berjaya didaftarkan.' })
+      reload()
+      return true
+    } catch (error) {
+      setNotice({ ok: false, message: error instanceof Error ? error.message : 'Import gagal.' })
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function register(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const d = new FormData(event.currentTarget)
@@ -127,6 +145,7 @@ function RosterRows({ cls, email, canManage }: { cls: RosterClass; email: string
           <button type="submit" className="secondary-button">Daftar murid</button>
         </fieldset>
       </form>
+      <RosterCsvImport cls={cls} startDefault={startDefault} disabled={busy || !pupils} onImport={importCsv} />
       {!pupils ? <p role="status">Sedang memuatkan murid…</p>
         : !pupils.length ? <p>Belum ada murid didaftarkan dalam kelas ini.</p>
         : <>
@@ -138,34 +157,30 @@ function RosterRows({ cls, email, canManage }: { cls: RosterClass; email: string
                   <span>{p.number} · {p.endsOn && p.status === 'active' ? 'Pendaftaran tamat' : statusNames[p.status]}</span>
                   <span>Mula: {p.startsOn}{p.endsOn ? ' · Tamat: ' + p.endsOn : ''}</span>
                 </div>
-                {canManage && <RecordActions item={{ ...p, entity: 'student' }} disabled={busy} onChanged={reload} />}
+                {(canManage || (!p.endsOn && p.status === 'active')) && <RecordActions
+                  item={{ ...p, entity: 'student' }} rosterClassId={canManage ? undefined : classId}
+                  disabled={busy} onChanged={() => { setNotice({ ok: true, message: 'Perubahan murid disimpan.' }); reload() }} />}
                 {!p.endsOn && p.status === 'active' && editing?.id !== p.id && <div>
-                  {!canManage && <button type="button" className="secondary-button" disabled={busy} onClick={() => { setNotice(undefined); setEditing({ id: p.id, action: 'rename' }) }}>Betulkan nama</button>}
                   <button type="button" className="secondary-button" disabled={busy || p.startsOn > currentDate} onClick={() => { setNotice(undefined); setEditing({ id: p.id, action: 'exit' }) }}>Kemas kini status</button>
                 </div>}
                 {!p.endsOn && editing?.id === p.id && <form className="roster-edit" onSubmit={event => {
                   event.preventDefault()
                   const form = event.currentTarget
                   const d = new FormData(form)
-                  if (editing.action === 'rename') {
-                    void save(form, { action: 'rename', classId, studentId: p.id, name: value(d, 'name') }, 'Nama murid dikemas kini.')
-                  } else {
-                    const status = value(d, 'status') as ExitStatus
-                    if (window.confirm('Sahkan status “' + statusNames[status] + '” untuk ' + p.name + '? Pendaftaran kelas akan ditamatkan.')) {
-                      void save(form, { action: 'exit', classId, studentId: p.id, status, date: value(d, 'date') }, 'Status dikemas kini. Sejarah murid dikekalkan.')
-                    }
+                  const status = value(d, 'status') as ExitStatus
+                  if (window.confirm('Sahkan status “' + statusNames[status] + '” untuk ' + p.name + '? Pendaftaran kelas akan ditamatkan.')) {
+                    void save(form, { action: 'exit', classId, studentId: p.id, status, date: value(d, 'date') }, 'Status dikemas kini. Sejarah murid dikekalkan.')
                   }
                 }}>
                   <fieldset className="setup-fields" disabled={busy}>
-                    {editing.action === 'rename' ? <label>Nama penuh<input name="name" defaultValue={p.name} maxLength={150} required /></label>
-                      : <>
+                    <>
                         <label>Status baharu<select name="status" defaultValue="" required>
                           <option value="" disabled>Pilih status</option>
                           <option value="transferred">Pindah sekolah</option>
                           <option value="removed">Dibuang sekolah</option>
                         </select></label>
                         <label>Tarikh keluar<input name="date" type="date" defaultValue={currentDate} min={p.startsOn} max={currentDate} required /></label>
-                      </>}
+                    </>
                     <button type="submit" className="secondary-button">Simpan</button>
                     <button type="button" className="secondary-button" onClick={() => setEditing(undefined)}>Batal</button>
                   </fieldset>

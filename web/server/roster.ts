@@ -1,5 +1,6 @@
 import { AuthError, type VerifiedIdentity } from './auth-core.ts'
 import { staffActor, type Sql } from './staff-data.ts'
+import { parseRosterCsv, pupilFields } from '../shared/roster-csv.ts'
 import type { RosterCommand } from '../shared/roster.ts'
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
@@ -18,26 +19,30 @@ export function parseRosterCommand(value: unknown): RosterCommand {
     if (!result || result.length > 150) return invalid()
     return result
   }
-  function date() {
-    const d = v.date
-    if (typeof d !== 'string' || !/^20\d\d-\d{2}-\d{2}$|^2100-\d{2}-\d{2}$/.test(d)) return invalid('Tarikh tidak sah.')
-    const ms = Date.parse(d)
-    if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== d) return invalid('Tarikh tidak sah.')
-    return d
+  function date() { return rosterDate(v.date) }
+  function fields() {
+    try { return pupilFields(v.number, v.name) }
+    catch (error) { return invalid(error instanceof Error ? error.message : 'Maklumat murid tidak sah.') }
   }
   const classId = rosterId(v.classId)
   switch (v.action) {
-    case 'register': {
-      const number = typeof v.number === 'string' ? v.number.trim().toUpperCase() : ''
-      if (!/^[A-Z0-9][A-Z0-9/_-]{0,29}$/.test(number)) return invalid('Gunakan nombor daftar sekolah yang sah.')
-      return { action: 'register', classId, number, name: name(), date: date() }
-    }
+    case 'register': return { action: 'register', classId, ...fields(), date: date() }
+    case 'edit': return { action: 'edit', classId, studentId: rosterId(v.studentId), ...fields() }
+    case 'delete': return { action: 'delete', classId, studentId: rosterId(v.studentId) }
     case 'rename': return { action: 'rename', classId, studentId: rosterId(v.studentId), name: name() }
     case 'exit':
       if (v.status !== 'transferred' && v.status !== 'removed') return invalid()
       return { action: 'exit', classId, studentId: rosterId(v.studentId), status: v.status, date: date() }
     default: return invalid()
   }
+}
+
+export function rosterDate(d: unknown) {
+  const invalid = () => { throw new AuthError(400, 'Tarikh tidak sah.') }
+  if (typeof d !== 'string' || !/^20\d\d-\d{2}-\d{2}$|^2100-\d{2}-\d{2}$/.test(d)) return invalid()
+  const ms = Date.parse(d)
+  if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== d) return invalid()
+  return d
 }
 
 function access(sql: Sql, identity: VerifiedIdentity) {
@@ -72,6 +77,39 @@ export function readRoster(sql: Sql, identity: VerifiedIdentity, classId: string
   `
 }
 
+export function importRoster(sql: Sql, identity: VerifiedIdentity, classId: string, date: string,
+  students: ReturnType<typeof parseRosterCsv>) {
+  return sql`
+    WITH ${access(sql, identity)}, selected AS (
+      SELECT * FROM allowed_classes WHERE id = ${classId}
+    ), incoming AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(students)}::jsonb) AS csv(number text, name text, line integer)
+    ), duplicates AS (
+      SELECT i.line, i.number FROM incoming i
+      WHERE EXISTS (SELECT 1 FROM selected) AND EXISTS (
+        SELECT 1 FROM students s WHERE upper(s.student_number) = i.number
+      )
+    ), pupils AS (
+      INSERT INTO students (student_number, full_name)
+      SELECT i.number, i.name FROM selected c CROSS JOIN incoming i
+      WHERE c.year = EXTRACT(YEAR FROM ${date}::date) AND NOT EXISTS (SELECT 1 FROM duplicates)
+      RETURNING id
+    ), enrolled AS (
+      INSERT INTO enrolments (student_id, academic_year_id, class_id, starts_on)
+      SELECT p.id, c.academic_year_id, c.id, ${date}::date FROM pupils p CROSS JOIN selected c
+      RETURNING id, student_id, class_id, starts_on
+    ), logged AS (
+      INSERT INTO audit_events (actor_id, event_type, entity_type, entity_id, after_value)
+      SELECT c.actor_id, 'student.registered', 'student', e.student_id, to_jsonb(e)
+      FROM selected c CROSS JOIN enrolled e RETURNING id
+    )
+    SELECT EXISTS(SELECT 1 FROM selected) AS allowed,
+      EXISTS(SELECT 1 FROM selected WHERE year = EXTRACT(YEAR FROM ${date}::date)) AS valid_date,
+      COALESCE((SELECT jsonb_agg(to_jsonb(duplicates) ORDER BY line) FROM duplicates), '[]') AS duplicates,
+      (SELECT count(*)::int FROM logged) AS imported
+  `
+}
+
 export function changeRoster(sql: Sql, identity: VerifiedIdentity, command: RosterCommand) {
   const head = sql`
     ${access(sql, identity)},
@@ -99,13 +137,51 @@ export function changeRoster(sql: Sql, identity: VerifiedIdentity, command: Rost
   `
 
   const target = sql`
-    SELECT s.id, s.full_name, s.status, e.id AS enrolment_id, e.starts_on, c.actor_id, c.id AS class_id
+    SELECT s.id, s.full_name, s.student_number, s.status, e.id AS enrolment_id, e.starts_on, c.actor_id, c.id AS class_id
     FROM selected c JOIN enrolments e ON e.class_id = c.id JOIN students s ON s.id = e.student_id
     WHERE s.id = ${command.studentId} AND s.status = 'active' AND e.ends_on IS NULL
       AND NOT EXISTS (SELECT 1 FROM enrolments other
         WHERE other.student_id = s.id AND other.id <> e.id AND other.ends_on IS NULL)
     FOR UPDATE OF s
   `
+  if (command.action === 'delete') return sql`
+    WITH ${head}, target AS MATERIALIZED (${target}), removable AS (
+      SELECT t.* FROM target t
+      WHERE NOT EXISTS (SELECT 1 FROM results r WHERE r.student_id = t.id)
+        AND NOT EXISTS (SELECT 1 FROM parent_students p WHERE p.student_id = t.id)
+        AND NOT EXISTS (SELECT 1 FROM enrolments e WHERE e.student_id = t.id AND e.id <> t.enrolment_id)
+    ), removed_enrolment AS (
+      DELETE FROM enrolments e USING removable r WHERE e.id = r.enrolment_id
+      RETURNING e.student_id
+    ), removed AS (
+      DELETE FROM students s USING removed_enrolment e WHERE s.id = e.student_id
+      RETURNING s.id
+    ), logged AS (
+      INSERT INTO audit_events (actor_id, event_type, entity_type, entity_id, before_value)
+      SELECT t.actor_id, 'student.deleted', 'student', r.id, to_jsonb(t) - 'actor_id'
+      FROM removed r JOIN removable t ON t.id = r.id RETURNING id
+    )
+    SELECT EXISTS(SELECT 1 FROM selected) AS allowed, true AS valid_date,
+      EXISTS(SELECT 1 FROM logged) AS changed
+  `
+  if (command.action === 'edit') return sql`
+    WITH ${head}, target AS MATERIALIZED (${target}), changed AS (
+      UPDATE students s SET full_name = ${command.name}, student_number = ${command.number}
+      FROM target t WHERE s.id = t.id AND s.status = 'active'
+        AND NOT EXISTS (SELECT 1 FROM students other WHERE other.id <> s.id AND upper(other.student_number) = ${command.number})
+      RETURNING s.id, s.full_name, s.student_number, t.full_name AS previous_name,
+        t.student_number AS previous_number, t.actor_id, t.class_id
+    ), logged AS (
+      INSERT INTO audit_events (actor_id, event_type, entity_type, entity_id, before_value, after_value)
+      SELECT actor_id, 'student.updated', 'student', id,
+        jsonb_build_object('name', previous_name, 'number', previous_number, 'class_id', class_id),
+        jsonb_build_object('name', full_name, 'number', student_number, 'class_id', class_id)
+      FROM changed RETURNING id
+    )
+    SELECT EXISTS(SELECT 1 FROM selected) AS allowed, true AS valid_date,
+      EXISTS(SELECT 1 FROM logged) AS changed
+  `
+
   if (command.action === 'rename') return sql`
     WITH ${head}, target AS (${target}), changed AS (
       UPDATE students s SET full_name = ${command.name}
